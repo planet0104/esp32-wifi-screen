@@ -1,0 +1,914 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>ESP32-WiFiScreen</title>
+<style>
+    html,body{
+        height: 100%;
+    }
+    #editor, #output {
+        width: 90%;
+        height: 150px;
+        margin: 10px;
+        padding: 10px;
+        font-family: monospace;
+    }
+    #editor { border: 1px solid #ccc; height: 70%; }
+    #output { white-space: pre-wrap; background-color: #f4f4f4; }
+</style>
+</head>
+<body>
+
+<h2>ESP32-WiFiScreen屏幕测试代码</h2>
+<div>
+    <button onclick="setExampleCode(EXAMPLE_CLOCK)">时钟</button>
+    <button onclick="setExampleCode(EXAMPLE_TEXT)">文字</button>
+    <button onclick="setExampleCode(EXAMPLE_BASE64_IMAGE)">Base64图像</button>
+    <button onclick="setExampleCode(EXAMPLE_UPLOAD_IMAGE)">预设图像</button>
+    <button onclick="setExampleCode(EXAMPLE_RECT)">方块</button>
+    <button onclick="setExampleCode(EXAMPLE_ROUND_RECT)">圆角方块</button>
+    <button onclick="setExampleCode(EXAMPLE_CIRCLE)">圆</button>
+    <button onclick="setExampleCode(EXAMPLE_Ellipse)">椭圆</button>
+    <button onclick="setExampleCode(EXAMPLE_LineSegment)">线段</button>
+    <button onclick="setExampleCode(EXAMPLE_Polyline)">多段线</button>
+    <button onclick="setExampleCode(EXAMPLE_Triangle)">三角形</button>
+    <button onclick="setExampleCode(EXAMPLE_Arc)">弧形</button>
+    <button onclick="setExampleCode(EXAMPLE_Sector)">扇形</button>
+    <button onclick="setExampleCode(EXAMPLE_HTTP)">HTTP发送图片</button>
+    <button onclick="setExampleCode(EXAMPLE_WS)">WebSocket发送图片</button>
+</div>
+<textarea id="editor"></textarea>
+<div><button onclick="runCode()"><h3>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;发送&nbsp;&nbsp;&nbsp;&nbsp;</h3></button></div>
+<textarea id="output"></textarea>
+<script>
+var editor = document.getElementById('editor');
+
+const EXAMPLE_CLOCK = `
+//获取屏幕大小
+const response = await fetch('/display_config');
+let disp_config = JSON.parse(await response.text());
+const width = disp_config.rotated_width;
+const height = disp_config.rotated_height;
+
+// 计算时钟大小
+var diameter = Math.min(width, height);
+var clock_top = parseInt((height - diameter)/2);
+var clock_left = parseInt((width - diameter)/2);
+
+// 创建 WebSocket 实例
+const location = window.location;
+let wsUrl = 'ws://'+location.host+'/ws';
+const socket = new WebSocket(wsUrl);
+socket.onopen = async function(event) {
+    window.clock_run = true;
+    //绘制时钟
+    while(window.clock_run){
+        var elements = [];
+        //黑色背景
+        elements.push({
+            "Rectangle": {
+                "fill_color": "black",
+                "stroke_width": 0,
+                "height": height,
+                "width": width,
+                "left": 0,
+                "top": 0
+            }
+        });
+
+        //绘制表盘
+        elements.push({
+            "Circle": {
+                "top_left": [clock_left, clock_top],
+                "diameter": diameter,
+                "stroke_width": 0,
+                // "fill_color": '#fec435'
+                "fill_color": '#ebff62'
+            }
+        });
+
+        const now = new Date();
+        const hour = now.getHours() % 12;
+        const minute = now.getMinutes();
+        const second = now.getSeconds();
+        const cx = parseInt(width/2);
+        const cy = parseInt(height/2);
+        const r = parseInt(diameter/2);
+
+        const c1 = 16;
+        elements.push({
+            "Circle": {
+                "top_left": [cx-c1/2, cy-c1/2],
+                "diameter": c1,
+                "stroke_width": 0,
+                "fill_color": 'black'
+            }
+        });
+
+        // 画数字
+        var textAngles = [
+            0,              30*Math.PI/180, 60*Math.PI/180, 90*Math.PI/180,
+            120*Math.PI/180, 150*Math.PI/180, 180*Math.PI/180, 210*Math.PI/180,
+            240*Math.PI/180, 270*Math.PI/180, 300*Math.PI/180, 330*Math.PI/180
+        ];
+        textAngles.forEach((a, id) => {
+            var x = parseInt(cx + r*0.85 * Math.cos(a-Math.PI/3));
+            var y = parseInt(cy + r*0.85 * Math.sin(a-Math.PI/3));
+            elements.push({
+                "Text": {
+                    "color": "black",
+                    "size": 20,
+                    "text": (id+1)+'',
+                    "x": x-10,
+                    "y": y-10,
+                }
+            });
+        });
+
+        //日期
+        var text_size = parseInt(diameter/16);
+        var date_str = formatDate(new Date());
+        var tx = parseInt(cx-text_size*3);
+        var ty = parseInt(cy+diameter/4.5);
+        elements.push({
+            "RoundedRectangle": {
+                "fill_color": "#000080",
+                "stroke_width": 0,
+                "left": tx-10,
+                "top": ty-3,
+                "width": text_size*8,
+                "height": 20,
+                "top_left_corner": [10, 10],
+                "top_right_corner": [10, 10],
+                "bottom_right_corner": [10, 10],
+                "bottom_left_corner": [10, 10],
+                
+            }
+        });
+        elements.push({
+            "Text": {
+                "color": "white",
+                "size": text_size,
+                "text": date_str,
+                "x": tx,
+                "y": ty,
+            }
+        });
+
+        // 画时针
+        const hourAngle = (hour * Math.PI / 6) + (minute * Math.PI / (6 * 60)) + (second * Math.PI / (360 * 60)) - Math.PI/2;
+        const hour_hand_len = r*0.7;
+        const hx = parseInt(cx + hour_hand_len * Math.cos(hourAngle));
+        const hy = parseInt(cy + hour_hand_len * Math.sin(hourAngle));
+        const hx1 = parseInt(cx + 15 * Math.cos(hourAngle-Math.PI));
+        const hy1 = parseInt(cy + 15 * Math.sin(hourAngle-Math.PI));
+        elements.push({
+            "Line": {
+                "color": "black",
+                "stroke_width": 7,
+                "start": [cx, cy],
+                "end": [hx, hy]
+            }
+        });
+        elements.push({
+            "Line": {
+                "color": "black",
+                "stroke_width": 7,
+                "start": [cx, cy],
+                "end": [hx1, hy1]
+            }
+        });
+
+        // 画分针
+        const minuteAngle = (minute * Math.PI / 30) + (second * Math.PI / (30 * 60)) - Math.PI/2;
+        const minute_hand_len = r*0.8;
+        const mx = parseInt(cx + minute_hand_len * Math.cos(minuteAngle));
+        const my = parseInt(cy + minute_hand_len * Math.sin(minuteAngle));
+        const mx1 = parseInt(cx + 15 * Math.cos(minuteAngle-Math.PI));
+        const my1 = parseInt(cy + 15 * Math.sin(minuteAngle-Math.PI));
+        elements.push({
+            "Line": {
+                "color": "black",
+                "stroke_width": 4,
+                "start": [cx, cy],
+                "end": [mx, my]
+            }
+        });
+        elements.push({
+            "Line": {
+                "color": "black",
+                "stroke_width": 4,
+                "start": [cx, cy],
+                "end": [mx1, my1]
+            }
+        });
+
+        // 画秒针
+        const second_hand_len = r*0.9;
+        const secondAngle = second * Math.PI / 30  - Math.PI/2;
+        const sx = parseInt(cx + second_hand_len * Math.cos(secondAngle));
+        const sy = parseInt(cy + second_hand_len * Math.sin(secondAngle));
+        elements.push({
+            "Line": {
+                "color": "black",
+                "stroke_width": 3,
+                "start": [cx, cy],
+                "end": [sx, sy]
+            }
+        });
+
+        socket.send(JSON.stringify(elements));
+
+        await sleep(1000);
+    }
+    socket.close();
+};
+
+socket.onmessage = msg =>{
+    console.log(msg.data);
+};
+
+function sleep(ms) {
+    return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+function formatDate(date) {
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const day = String(date.getDate()).padStart(2, '0');
+    return year+'.'+month+'.'+day;
+}
+`;
+
+const EXAMPLE_TEXT = `
+// 获取屏幕参数
+const response = await fetch('/display_config');
+let disp_config = JSON.parse(await response.text());
+const width = disp_config.rotated_width;
+const height = disp_config.rotated_height;
+
+// FilledRect 填充黑色背景
+// Text 绘制白色文字
+var jsonData = [
+    {
+        "Rectangle": {
+            "fill_color": "black",
+            "height": height,
+            "width": width,
+            "stroke_width": 0,
+            "left": 0,
+            "top": 0
+        }
+    },
+    {
+        "Text": {
+            "color": "white",
+            "size": 20,
+            "text": "Hello!你好世界！",
+            "x": 10,
+            "y": 15
+    }
+}];
+
+let result = await (await fetch('/draw_canvas', {
+    method: 'POST',
+    body: JSON.stringify(jsonData)
+})).text();
+console.log(result);
+`;
+
+const EXAMPLE_BASE64_IMAGE = `
+var jsonData = [
+    {
+        "Image": {
+            "base64": "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01cQpzzjWmmriApSi6Nl2GazWqawQRwSZwMo1HVd6hNoLzimmgrgKUovbZFhmtFpnMEGcFGUTONZ13esTac841ppq4gFBecU00FcAoLzimmgrgFOeca001cQpzzjWmmriApURtQJljXOs8Zs04wmQjCFzrE2gvOKaaCuApk+NycDXPVONtNnROMJkYRulX9N5iZTnnGtNNXEAoLzimmgrgFBecU00FcApzzjWmmriFOeca001cQFKTnRsizTma0zmCyKKTKJnCoqrvUJtBecU00FcBSk57bLs05otU1gsyiozgZQrKu71ibTnnGtNNXEAoLzimmgrgFBecU00FcApzzjWmmriFOeca001cQGlzc26W7NSmayIlpMzNKv5F1A+ObdTdopLNZka1GRklX8j6gc3xupuzSposyNaSMjUr+RdYPj43S3aJS0WREtRERKV/I+sBmoLzimmgrgFBecU00FcApzzjWmmriFOeca001cQCgvOKaaCuApSi6Nl2GazWqawQRwSZwMo1HVd6hNpzzjWmmriKUovbZFhmtFpnMEGcFGUTONZ13esBNoLzimmgrgFBecU00FcApzzjWmmriFOeca001cQCgvOKaaCuApURtQJljXOs8Zs04wmQjCFzrE2nPONaaauIpUttQJ9kXOs8J044wmRhGNzqATaC84ppoK4BQXnFNNBXAKc841ppq4hTnnGtNNXEAoLzimmgrgKUnOjZFmnM1pnMFkUUmUTOFRVXeoTac841ppq4ilJz22XZpzRaprBZlFRnAyhWVd3rAf/9CC/Xy1yi9oxmGl+vlrlF7RjMAAAAKcqYDN2e8TBTlTAZuz3iYAAAAKfN3ePLEwU+bu8eWJgAAAApyXh83abhMFOS8Pm7TcJgAAAA0uN8ssojaIH6+WuUXtGDjfLLKI2iB+vlrlF7RgMwAAAKcqYDN2e8TBTlTAZuz3gJgAAAKfN3ePLEwU+bu8eWAmAAAApyXh83abhMFOS8Pm7TcA/9GC/Xy1yi9oxmFt7eXRLZoSnecolqiqyqKJxOuEKojPS3Po2tXwATAFOlufRtavgFLc+ja1fAAlTAZuz3iYOif3h2TYp7CfFig0+0UU1NcE1XYfW6YwUtz6NrV8AEwBTpbn0bWr4BS3Po2tXwAObu8eWJg6KkO1CnWDkWaEyyK+KZ8U67cqhc+YwUtz6NrV8AEwBTpbn0bWr4BS3Po2tXwAJLw+btNwmDonB4dlWWYwmQYrNXtFHOTVFNdyP1ukMFLc+ja1fABMAU6W59G1q+AUtz6NrV8AGVxvlllEbRA/Xy1yi9oxSdHl0U2Zkl3mqNaYKsqjgcSrhCuAPby6JbNCU7zlEtUVWVRROJ1whVEBEAU6W59G1q+AUtz6NrV8AEwU5UwGbs94Utz6NrV8Bvf3h2TYp7CfFig0+0UU1NcE1XYfW6YDnQFOlufRtavgFLc+ja1fABMFPm7vHlhS3Po2tXwG+kO1CnWDkWaEyyK+KZ8U67cqhc+YDnQFOlufRtavgFLc+ja1fABMFOS8Pm7TcFLc+ja1fAb3B4dlWWYwmQYrNXtFHOTVFNdyP1ukA//Sgv18tcovaMZhpfr5a5Re0YzAAAACnKmAzdnvEwU5UwGbs94mAAAACnzd3jyxMFPm7vHliYAAAAKcl4fN2m4TBTkvD5u03CYAAAANLjfLLKI2iB+vlrlF7Rg43yyyiNogfr5a5Re0YDMAAACnKmAzdnvEwU5UwGbs94CYAAACnzd3jyxMFPm7vHlgJgAAAKcl4fN2m4TBTkvD5u03AP/Tgv18tcovaMZhbe3Z0U2aGp4mqNaopsSjgcTqjGuAz0Rz6Tql8QEwBTojn0nVL4hRHPpOqXxAJUwGbs94mDon93dlWKe3mQYoJPs1HOTXBVVyP0ukMFEc+k6pfEBMAU6I59J1S+IURz6Tql8QDm7vHliYOio7tQptn5FmjPsavimfDNu3K43PkMFEc+k6pfEBMAU6I59J1S+IURz6Tql8QCS8Pm7TcJg6Jwd3ZNlmN58WKyV7NRTU1RVXdh9LpjBRHPpOqXxATAFOiOfSdUviFEc+k6pfEBlcb5ZZRG0QP18tcovaMUnR2dEtmZpeJyiWmCbEoonEqoxqiD27OimzQ1PE1RrVFNiUcDidUY1wARAFOiOfSdUviFEc+k6pfEBMFOVMBm7PeFEc+k6pfEb393dlWKe3mQYoJPs1HOTXBVVyP0ukA50BTojn0nVL4hRHPpOqXxATBT5u7x5YURz6Tql8Rvo7tQptn5FmjPsavimfDNu3K43PkA50BTojn0nVL4hRHPpOqXxATBTkvD5u03BRHPpOqXxG9wd3ZNlmN58WKyV7NRTU1RVXdh9LpgP/1IL9fLXKL2jGYaX6+WuUXtGMwAAAApypgM3Z7xMFOVMBm7PeJgAAAAp83d48sTBT5u7x5YmAAAACnJeHzdpuEwU5Lw+btNwmAAAADS43yyyiNogfr5a5Re0YON8ssojaIH6+WuUXtGAzAAAApypgM3Z7xMFOVMBm7PeAmAAAAp83d48sTBT5u7x5YCYAAACnJeHzdpuEwU5Lw+btNwD/1YL9fLXKL2jGYW3uSHto2aLSiKVLUZcpNwzP+wz2lfMX+SP2ATAFO0r5i/yR+wWlfMX+SP2AJUwGbs94mDon+S3ltYpiIzGKEK5SalFGJVn6DBaV8xf5I/YBMAU7SvmL/JH7BaV8xf5I/YA5u7x5YmDoykp5NyNlNgsms+bEqymzbsYf+mVz/UZ9pXzF/kj9gEwBTtK+Yv8AJH7BaV8xf5I/YAkvD5u03CYOicJLeWNlnohPYrQnlJrUcIFUfoMFpXzF/kj9gEwBTtK+Yv8AJH7BaV8xf5I/YBlcb5ZZRG0QP18tcovaMUnSSHtm2ZrUiCUrSZ8pNwjL+wPckPbRs0WlEUqWoy5Sbhmf9gEQBTtK+Yv8kfsFpXzF/kj9gEwU5UwGbs94WlfMX+SP2G9/kt5bWKYiMxihCuUmpRRiVZ+gDnQFO0r5i/yR+wWlfMX+SP2ATBT5u7x5YWlfMX+SP2G+1bzQrDM5dmnwnJ+GZCMYwu/9gOdAU7SvmL/JH7BaV8xf5I/YBMFOS8Pm7TcFpXzF/kj9hvcJLeWNlnohPYrQnlJrUcIFUfoA/9k=",
+            "x": 0,
+            "y": 0
+        }
+    },
+    {
+        "Image": {
+            "base64": "R0lGODlhOwBNAPMIAAAAAB9eOX9MOTGvZcyBUv3ZXlxegaytv////wAAAAAAAAAAAAAAAAAAAAAAAAAAACH5BAEAAAkALAAAAAA7AE0AAAT+MMlJq00g58u7/xxQjOMGnugHECRppnC6EjTbvnEe1nxb4LogZkbTGI9GoQXJ1ASeg6h0KtUoMTbfiJB5QqlgMBBG1Ha94XR4fCLSXN6Aer7WuYtxup4KsPMAeXuCUX05M4Bog4qFMWeJioOMKE6PkJGTIoiVU0iWhAeSIXCBfAcIp6cAngAIoUs3pJymqKiqi7OuEyJbXLGftLSgi7UdbppfnMDAtoKsqcUCNcdyfMq0zM2muRIAAt4C02Kz1tjNrR7d3uHi5J4DbBQZ4HHU7KjC7u9t62tH+YST6P1bFNDXwDnbKjhCdhBhGzwG05SroidhPIibJOKTNZGTRW7+fyKWSiWLJB8rIIjME9mkZSeAKb+pE7kG18hWVSbJnJlRDYCNHHPKYEJTjE+hV441hKnESNFLQjTQALfQXQB4Ov90ocRwzhOsMmQu/Oqy7BVu6viFiUPk588DoMDuU4uQRBFQy+SiQ1OvYgsuoMbV0ruELx+fPu66NfKMjEBOffloAZxBGaihSg9L1FKgyM/BKNFl6GW4SmROnDsjifsRgzeMXTtWSc1DMZc2PDPKJkS7NpddrdNl1rwmNa8/rX7g1rTm9GzjiTWUaNPznXPe0P9ySd4aQ/Xd77JH5069K0XE4u1KV36BESKE6NOrTs5e4W3v18+Lkb9lfa5D+EnTpMFm/FE23RLR/JaBRPldxV8JKxyo0Gu/XUXIgu94FeGDu7CHknCacDWghg925gI3ZHFFz4r5RXFVFhzqwuKMj9ERIYzG2XDfEDT22AwLOHIGJCDuTcPicBXVlqM0V+myEo1I2ujblCE16eRYXtCFEJVUhjihgvRo6ROXtVFFJBDdSHNEjRUlSGVaBhgQ2GUK3QGbeRLtpKdLxdwRTosuprNnEoasyaZPLZ2lEIt0XNXdWUbiGaiiMtBIhaOUVurUpoRmOomccL2VCi6eNlLWoyhEAAA7",
+            "x": 20,
+            "y": 20
+        }
+    }
+];
+
+let result = await (await fetch('/draw_canvas', {
+    method: 'POST',
+    body: JSON.stringify(jsonData)
+})).text();
+console.log(result);
+`;
+
+const EXAMPLE_UPLOAD_IMAGE = `
+var img1 = "data:image/jpg;base64,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01cQpzzjWmmriApSi6Nl2GazWqawQRwSZwMo1HVd6hNoLzimmgrgKUovbZFhmtFpnMEGcFGUTONZ13esTac841ppq4gFBecU00FcAoLzimmgrgFOeca001cQpzzjWmmriApURtQJljXOs8Zs04wmQjCFzrE2gvOKaaCuApk+NycDXPVONtNnROMJkYRulX9N5iZTnnGtNNXEAoLzimmgrgFBecU00FcApzzjWmmriFOeca001cQFKTnRsizTma0zmCyKKTKJnCoqrvUJtBecU00FcBSk57bLs05otU1gsyiozgZQrKu71ibTnnGtNNXEAoLzimmgrgFBecU00FcApzzjWmmriFOeca001cQGlzc26W7NSmayIlpMzNKv5F1A+ObdTdopLNZka1GRklX8j6gc3xupuzSposyNaSMjUr+RdYPj43S3aJS0WREtRERKV/I+sBmoLzimmgrgFBecU00FcApzzjWmmriFOeca001cQCgvOKaaCuApSi6Nl2GazWqawQRwSZwMo1HVd6hNpzzjWmmriKUovbZFhmtFpnMEGcFGUTONZ13esBNoLzimmgrgFBecU00FcApzzjWmmriFOeca001cQCgvOKaaCuApURtQJljXOs8Zs04wmQjCFzrE2nPONaaauIpUttQJ9kXOs8J044wmRhGNzqATaC84ppoK4BQXnFNNBXAKc841ppq4hTnnGtNNXEAoLzimmgrgKUnOjZFmnM1pnMFkUUmUTOFRVXeoTac841ppq4ilJz22XZpzRaprBZlFRnAyhWVd3rAf/9CC/Xy1yi9oxmGl+vlrlF7RjMAAAAKcqYDN2e8TBTlTAZuz3iYAAAAKfN3ePLEwU+bu8eWJgAAAApyXh83abhMFOS8Pm7TcJgAAAA0uN8ssojaIH6+WuUXtGDjfLLKI2iB+vlrlF7RgMwAAAKcqYDN2e8TBTlTAZuz3gJgAAAKfN3ePLEwU+bu8eWAmAAAApyXh83abhMFOS8Pm7TcA/9GC/Xy1yi9oxmFt7eXRLZoSnecolqiqyqKJxOuEKojPS3Po2tXwATAFOlufRtavgFLc+ja1fAAlTAZuz3iYOif3h2TYp7CfFig0+0UU1NcE1XYfW6YwUtz6NrV8AEwBTpbn0bWr4BS3Po2tXwAObu8eWJg6KkO1CnWDkWaEyyK+KZ8U67cqhc+YwUtz6NrV8AEwBTpbn0bWr4BS3Po2tXwAJLw+btNwmDonB4dlWWYwmQYrNXtFHOTVFNdyP1ukMFLc+ja1fABMAU6W59G1q+AUtz6NrV8AGVxvlllEbRA/Xy1yi9oxSdHl0U2Zkl3mqNaYKsqjgcSrhCuAPby6JbNCU7zlEtUVWVRROJ1whVEBEAU6W59G1q+AUtz6NrV8AEwU5UwGbs94Utz6NrV8Bvf3h2TYp7CfFig0+0UU1NcE1XYfW6YDnQFOlufRtavgFLc+ja1fABMFPm7vHlhS3Po2tXwG+kO1CnWDkWaEyyK+KZ8U67cqhc+YDnQFOlufRtavgFLc+ja1fABMFOS8Pm7TcFLc+ja1fAb3B4dlWWYwmQYrNXtFHOTVFNdyP1ukA//Sgv18tcovaMZhpfr5a5Re0YzAAAACnKmAzdnvEwU5UwGbs94mAAAACnzd3jyxMFPm7vHliYAAAAKcl4fN2m4TBTkvD5u03CYAAAANLjfLLKI2iB+vlrlF7Rg43yyyiNogfr5a5Re0YDMAAACnKmAzdnvEwU5UwGbs94CYAAACnzd3jyxMFPm7vHlgJgAAAKcl4fN2m4TBTkvD5u03AP/Tgv18tcovaMZhbe3Z0U2aGp4mqNaopsSjgcTqjGuAz0Rz6Tql8QEwBTojn0nVL4hRHPpOqXxAJUwGbs94mDon93dlWKe3mQYoJPs1HOTXBVVyP0ukMFEc+k6pfEBMAU6I59J1S+IURz6Tql8QDm7vHliYOio7tQptn5FmjPsavimfDNu3K43PkMFEc+k6pfEBMAU6I59J1S+IURz6Tql8QCS8Pm7TcJg6Jwd3ZNlmN58WKyV7NRTU1RVXdh9LpjBRHPpOqXxATAFOiOfSdUviFEc+k6pfEBlcb5ZZRG0QP18tcovaMUnR2dEtmZpeJyiWmCbEoonEqoxqiD27OimzQ1PE1RrVFNiUcDidUY1wARAFOiOfSdUviFEc+k6pfEBMFOVMBm7PeFEc+k6pfEb393dlWKe3mQYoJPs1HOTXBVVyP0ukA50BTojn0nVL4hRHPpOqXxATBT5u7x5YURz6Tql8Rvo7tQptn5FmjPsavimfDNu3K43PkA50BTojn0nVL4hRHPpOqXxATBTkvD5u03BRHPpOqXxG9wd3ZNlmN58WKyV7NRTU1RVXdh9LpgP/1IL9fLXKL2jGYaX6+WuUXtGMwAAAApypgM3Z7xMFOVMBm7PeJgAAAAp83d48sTBT5u7x5YmAAAACnJeHzdpuEwU5Lw+btNwmAAAADS43yyyiNogfr5a5Re0YON8ssojaIH6+WuUXtGAzAAAApypgM3Z7xMFOVMBm7PeAmAAAAp83d48sTBT5u7x5YCYAAACnJeHzdpuEwU5Lw+btNwD/1YL9fLXKL2jGYW3uSHto2aLSiKVLUZcpNwzP+wz2lfMX+SP2ATAFO0r5i/yR+wWlfMX+SP2AJUwGbs94mDon+S3ltYpiIzGKEK5SalFGJVn6DBaV8xf5I/YBMAU7SvmL/JH7BaV8xf5I/YA5u7x5YmDoykp5NyNlNgsms+bEqymzbsYf+mVz/UZ9pXzF/kj9gEwBTtK+Yv8AJH7BaV8xf5I/YAkvD5u03CYOicJLeWNlnohPYrQnlJrUcIFUfoMFpXzF/kj9gEwBTtK+Yv8AJH7BaV8xf5I/YBlcb5ZZRG0QP18tcovaMUnSSHtm2ZrUiCUrSZ8pNwjL+wPckPbRs0WlEUqWoy5Sbhmf9gEQBTtK+Yv8kfsFpXzF/kj9gEwU5UwGbs94WlfMX+SP2G9/kt5bWKYiMxihCuUmpRRiVZ+gDnQFO0r5i/yR+wWlfMX+SP2ATBT5u7x5YWlfMX+SP2G+1bzQrDM5dmnwnJ+GZCMYwu/9gOdAU7SvmL/JH7BaV8xf5I/YBMFOS8Pm7TcFpXzF/kj9hvcJLeWNlnohPYrQnlJrUcIFUfoA/9k=";
+var img2 = "data:image/gif;base64,R0lGODlhOwBNAPMIAAAAAB9eOX9MOTGvZcyBUv3ZXlxegaytv////wAAAAAAAAAAAAAAAAAAAAAAAAAAACH5BAEAAAkALAAAAAA7AE0AAAT+MMlJq00g58u7/xxQjOMGnugHECRppnC6EjTbvnEe1nxb4LogZkbTGI9GoQXJ1ASeg6h0KtUoMTbfiJB5QqlgMBBG1Ha94XR4fCLSXN6Aer7WuYtxup4KsPMAeXuCUX05M4Bog4qFMWeJioOMKE6PkJGTIoiVU0iWhAeSIXCBfAcIp6cAngAIoUs3pJymqKiqi7OuEyJbXLGftLSgi7UdbppfnMDAtoKsqcUCNcdyfMq0zM2muRIAAt4C02Kz1tjNrR7d3uHi5J4DbBQZ4HHU7KjC7u9t62tH+YST6P1bFNDXwDnbKjhCdhBhGzwG05SroidhPIibJOKTNZGTRW7+fyKWSiWLJB8rIIjME9mkZSeAKb+pE7kG18hWVSbJnJlRDYCNHHPKYEJTjE+hV441hKnESNFLQjTQALfQXQB4Ov90ocRwzhOsMmQu/Oqy7BVu6viFiUPk588DoMDuU4uQRBFQy+SiQ1OvYgsuoMbV0ruELx+fPu66NfKMjEBOffloAZxBGaihSg9L1FKgyM/BKNFl6GW4SmROnDsjifsRgzeMXTtWSc1DMZc2PDPKJkS7NpddrdNl1rwmNa8/rX7g1rTm9GzjiTWUaNPznXPe0P9ySd4aQ/Xd77JH5069K0XE4u1KV36BESKE6NOrTs5e4W3v18+Lkb9lfa5D+EnTpMFm/FE23RLR/JaBRPldxV8JKxyo0Gu/XUXIgu94FeGDu7CHknCacDWghg925gI3ZHFFz4r5RXFVFhzqwuKMj9ERIYzG2XDfEDT22AwLOHIGJCDuTcPicBXVlqM0V+myEo1I2ujblCE16eRYXtCFEJVUhjihgvRo6ROXtVFFJBDdSHNEjRUlSGVaBhgQ2GUK3QGbeRLtpKdLxdwRTosuprNnEoasyaZPLZ2lEIt0XNXdWUbiGaiiMtBIhaOUVurUpoRmOomccL2VCi6eNlLWoyhEAAA7";
+
+var img1FileData = await (await fetch(img1)).arrayBuffer();
+var img2FileData = await (await fetch(img2)).arrayBuffer();
+
+//上传图片1
+await fetch('/upload_image?key=img1', {
+    method: 'POST',
+    headers: {
+        'Content-Type': 'application/octet-stream'
+    },
+    body: img1FileData
+});
+
+//上传图片2
+await fetch('/upload_image?key=img2', {
+    method: 'POST',
+    headers: {
+        'Content-Type': 'application/octet-stream'
+    },
+    body: img2FileData
+});
+
+// 绘图
+var jsonData = [
+    {
+        "Image": {
+            "key": "img1",
+            "x": 0,
+            "y": 0
+        }
+    },
+    {
+        "Image": {
+            "key": "img2",
+            "x": 40,
+            "y": 40
+        }
+    }
+];
+
+fetch('/draw_canvas', {
+    method: 'POST',
+    body: JSON.stringify(jsonData)
+});
+`;
+
+const EXAMPLE_ROUND_RECT = `
+// 获取屏幕参数
+const response = await fetch('/display_config');
+let disp_config = JSON.parse(await response.text());
+const width = disp_config.rotated_width;
+const height = disp_config.rotated_height;
+
+var jsonData = [
+    {
+        "Rectangle": {
+            "fill_color": "black",
+            "stroke_width": 0,
+            "height": height,
+            "width": width,
+            "left": 0,
+            "top": 0
+        }
+    },
+    {
+        "RoundedRectangle": {
+            "fill_color": "red",
+            "stroke_color": "blue",
+            "stroke_width": 3,
+            "left": 16,
+            "top": 20,
+            "width": 60,
+            "height": 60,
+            "top_left_corner": [15, 15],
+            "top_right_corner": [15, 15],
+            "bottom_right_corner": [15, 15],
+            "bottom_left_corner": [15, 15],
+            
+        }
+    }
+];
+
+let result = await (await fetch('/draw_canvas', {
+    method: 'POST',
+    body: JSON.stringify(jsonData)
+})).text();
+console.log(result);
+`;
+
+const EXAMPLE_RECT = `
+// 获取屏幕参数
+const response = await fetch('/display_config');
+let disp_config = JSON.parse(await response.text());
+const width = disp_config.rotated_width;
+const height = disp_config.rotated_height;
+
+var jsonData = [
+    {
+        "Rectangle": {
+            "fill_color": "black",
+            "stroke_width": 0,
+            "height": height,
+            "width": width,
+            "left": 0,
+            "top": 0
+        }
+    },
+    {
+        "Rectangle": {
+            "fill_color": "red",
+            "stroke_color": "blue",
+            "stroke_width": 6,
+            "left": 10,
+            "top": 20,
+            "width": 60,
+            "height": 60,
+        }
+    },
+    {
+        "Rectangle": {
+            "stroke_color": "blue",
+            "stroke_width": 6,
+            "left": 80,
+            "top": 20,
+            "width": 60,
+            "height": 60,
+        }
+    },
+    {
+        "Rectangle": {
+            "fill_color": "red",
+            "stroke_width": 0,
+            "left": 10,
+            "top": 90,
+            "width": 60,
+            "height": 60,
+        }
+    }
+];
+
+let result = await (await fetch('/draw_canvas', {
+    method: 'POST',
+    body: JSON.stringify(jsonData)
+})).text();
+console.log(result);
+`;
+
+const EXAMPLE_CIRCLE = `
+// 获取屏幕参数
+const response = await fetch('/display_config');
+let disp_config = JSON.parse(await response.text());
+const width = disp_config.rotated_width;
+const height = disp_config.rotated_height;
+
+// FilledCircle 绘制实心圆
+// HollowCircle 绘制空心圆
+var jsonData = [
+    {
+        "Rectangle": {
+            "fill_color": "black",
+            "height": height,
+            "width": width,
+            "stroke_width": 0,
+            "left": 0,
+            "top": 0
+        }
+    },
+    {
+        "Circle": {
+            "top_left": [10, 10],
+            "diameter": 40,
+            "stroke_width": 2,
+            "fill_color": 'yellow',
+            "stroke_color": 'blue',
+        }
+    },
+    {
+        "Circle": {
+            "top_left": [60, 10],
+            "diameter": 40,
+            "stroke_width": 0,
+            "fill_color": '#f00'
+        }
+    },
+];
+
+fetch('/draw_canvas', {
+    method: 'POST',
+    body: JSON.stringify(jsonData)
+});
+`;
+
+const EXAMPLE_Ellipse = `
+// 获取屏幕参数
+const response = await fetch('/display_config');
+let disp_config = JSON.parse(await response.text());
+const width = disp_config.rotated_width;
+const height = disp_config.rotated_height;
+
+var jsonData = [
+    {
+        "Rectangle": {
+            "fill_color": "black",
+            "height": height,
+            "width": width,
+            "stroke_width": 0,
+            "left": 0,
+            "top": 0
+        }
+    },
+    {
+        "Ellipse": {
+            "top_left": [10, 10],
+            "size": [50, 30],
+            "stroke_width": 4,
+            "fill_color": 'yellow',
+            "stroke_color": '#00f',
+        }
+    },
+    {
+        "Ellipse": {
+            "top_left": [10, 50],
+            "size": [30, 50],
+            "stroke_width": 0,
+            "fill_color": '#f00',
+        }
+    },
+];
+
+fetch('/draw_canvas', {
+    method: 'POST',
+    body: JSON.stringify(jsonData)
+});
+`;
+
+const EXAMPLE_LineSegment = `
+// 获取屏幕参数
+const response = await fetch('/display_config');
+let disp_config = JSON.parse(await response.text());
+const width = disp_config.rotated_width;
+const height = disp_config.rotated_height;
+
+// LineSegment 绘制实线段
+var jsonData = [
+    {
+        "Rectangle": {
+            "fill_color": "black",
+            "height": height,
+            "width": width,
+            "stroke_width": 0,
+            "left": 0,
+            "top": 0
+        }
+    },
+    {
+        "Line": {
+            "color": "red",
+            "stroke_width": 10,
+            "end": [
+                100,
+                100
+            ],
+            "start": [
+                0,
+                0
+            ]
+        }
+    },
+];
+
+let result = await (await fetch('/draw_canvas', {
+    method: 'POST',
+    body: JSON.stringify(jsonData)
+})).text();
+console.log(result);
+`;
+
+const EXAMPLE_Polyline = `
+// 获取屏幕参数
+const response = await fetch('/display_config');
+let disp_config = JSON.parse(await response.text());
+const width = disp_config.rotated_width;
+const height = disp_config.rotated_height;
+
+var jsonData = [
+    {
+        "Rectangle": {
+            "fill_color": "black",
+            "height": height,
+            "width": width,
+            "stroke_width": 0,
+            "left": 0,
+            "top": 0
+        }
+    },
+    {
+        "Polyline": {
+            "color": "#ff0",
+            "stroke_width": 4,
+            "points": [
+                [30, 20],
+                [116, 20],
+                [52, 55],
+                [82, 85],
+            ]
+        }
+    }
+];
+
+let result = await (await fetch('/draw_canvas', {
+    method: 'POST',
+    body: JSON.stringify(jsonData)
+})).text();
+console.log(result);
+`;
+
+const EXAMPLE_Triangle = `
+// 获取屏幕参数
+const response = await fetch('/display_config');
+let disp_config = JSON.parse(await response.text());
+const width = disp_config.rotated_width;
+const height = disp_config.rotated_height;
+
+var jsonData = [
+    {
+        "Rectangle": {
+            "fill_color": "black",
+            "height": height,
+            "width": width,
+            "stroke_width": 0,
+            "left": 0,
+            "top": 0
+        }
+    },
+    {
+        "Triangle": {
+            "vertex1": [40, 10],
+            "vertex2": [80, 60],
+            "vertex3": [10, 60],
+            "stroke_width": 4,
+            "fill_color": 'red',
+            "stroke_color": 'yellow',
+        }
+    }
+];
+
+let result = await (await fetch('/draw_canvas', {
+    method: 'POST',
+    body: JSON.stringify(jsonData)
+})).text();
+console.log(result);
+`;
+
+const EXAMPLE_Sector = `
+// 获取屏幕参数
+const response = await fetch('/display_config');
+let disp_config = JSON.parse(await response.text());
+const width = disp_config.rotated_width;
+const height = disp_config.rotated_height;
+
+var jsonData = [
+    {
+        "Rectangle": {
+            "fill_color": "black",
+            "height": height,
+            "width": width,
+            "stroke_width": 0,
+            "left": 0,
+            "top": 0
+        }
+    },
+    {
+        "Sector": {
+            "top_left": [10, 10],
+            "diameter": 60,
+            "stroke_width": 4,
+            "angle_start": 0,
+            "angle_sweep": 120,
+            "fill_color": 'red',
+            "stroke_color": 'blue',
+        }
+    }
+];
+
+let result = await (await fetch('/draw_canvas', {
+    method: 'POST',
+    body: JSON.stringify(jsonData)
+})).text();
+console.log(result);
+`;
+
+const EXAMPLE_Arc = `
+// 获取屏幕参数
+const response = await fetch('/display_config');
+let disp_config = JSON.parse(await response.text());
+const width = disp_config.rotated_width;
+const height = disp_config.rotated_height;
+
+var jsonData = [
+    {
+        "Rectangle": {
+            "fill_color": "black",
+            "height": height,
+            "width": width,
+            "stroke_width": 0,
+            "left": 0,
+            "top": 0
+        }
+    },
+    {
+        "Arc": {
+            "top_left": [10, 10],
+            "diameter": 60,
+            "stroke_width": 4,
+            "angle_start": 0,
+            "angle_sweep": 180,
+            "color": 'red',
+        }
+    }
+];
+
+let result = await (await fetch('/draw_canvas', {
+    method: 'POST',
+    body: JSON.stringify(jsonData)
+})).text();
+console.log(result);
+`;
+
+const EXAMPLE_HTTP = `
+//从base64字符串加载图片
+function loadImageFormBase64Str(str) {
+    return new Promise((resolve, reject) => {
+        const img = new Image();
+        img.src = str;
+        img.onload = () => {
+            resolve(img);
+        };
+        img.onerror = () => {
+            reject('Failed to load image.');
+        };
+    });
+}
+
+function sleep(ms) {
+    return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+//准备图片
+var p1 = 'data:image/jpeg;base64,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';
+var p2 = 'data:image/jpeg;base64,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';
+var p3 = 'data:image/jpeg;base64,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';
+//加载图片
+var img1 = await loadImageFormBase64Str(p1);
+var img2 = await loadImageFormBase64Str(p2);
+var img3 = await loadImageFormBase64Str(p3);
+
+//获取屏幕大小
+const response = await fetch('/display_config');
+let disp_config = JSON.parse(await response.text());
+
+//准备画布，跟屏幕大小一致
+const canvas = document.createElement('canvas');
+canvas.width = disp_config.rotated_width;
+canvas.height = disp_config.rotated_height;
+const ctx = canvas.getContext('2d');
+
+//在canvas上绘制图片,并生成一张图片文件数据
+async function darw_image_to_canvas(img){
+    ctx.fillStyle = '#000000';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.drawImage(img, 0, 0);
+    const base64JpegImage = canvas.toDataURL('image/jpeg', 0.9);
+    var imgFileData = await (await fetch(base64JpegImage)).arrayBuffer();
+    return imgFileData;
+}
+
+//调用http接口显示图片
+async function draw_image(body){
+    await fetch('/draw_image', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/octet-stream'
+        },
+        body
+    });
+}
+
+// 循环绘制图片(HTTP单次请求速度不稳定)
+var t1 = Date.now();
+for(var i=0; i<10; i++){
+    var img1FileData = await darw_image_to_canvas(img3);
+    await draw_image(img1FileData);
+    var img2FileData = await darw_image_to_canvas(img2);
+    await draw_image(img2FileData);
+    var img3FileData = await darw_image_to_canvas(img1);
+    await draw_image(img3FileData);
+}
+var dur = Date.now() - t1;
+console.log('传输30次图片，耗时:'+dur+'ms');
+`;
+
+const EXAMPLE_WS = `
+//从base64字符串加载图片
+function loadImageFormBase64Str(str) {
+    return new Promise((resolve, reject) => {
+        const img = new Image();
+        img.src = str;
+        img.onload = () => {
+            resolve(img);
+        };
+        img.onerror = () => {
+            reject('Failed to load image.');
+        };
+    });
+}
+
+function sleep(ms) {
+    return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+//准备图片
+var p1 = 'data:image/jpeg;base64,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';
+var p2 = 'data:image/jpeg;base64,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';
+var p3 = 'data:image/jpeg;base64,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';
+//加载图片
+var img1 = await loadImageFormBase64Str(p1);
+var img2 = await loadImageFormBase64Str(p2);
+var img3 = await loadImageFormBase64Str(p3);
+
+//获取屏幕大小
+const response = await fetch('/display_config');
+let disp_config = JSON.parse(await response.text());
+
+//准备画布，跟屏幕大小一致
+const canvas = document.createElement('canvas');
+canvas.width = disp_config.rotated_width;
+canvas.height = disp_config.rotated_height;
+const ctx = canvas.getContext('2d');
+
+//在canvas上绘制图片,并生成一张图片文件数据
+async function darw_image_to_canvas(img){
+    ctx.fillStyle = '#000000';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.drawImage(img, 0, 0);
+    const base64JpegImage = canvas.toDataURL('image/jpeg', 0.9);
+    var imgFileData = await (await fetch(base64JpegImage)).arrayBuffer();
+    return imgFileData;
+}
+
+// 创建 WebSocket 实例
+const location = window.location;
+let wsUrl = 'ws://'+location.host+'/ws';
+const socket = new WebSocket(wsUrl);
+socket.onopen = async function(event) {
+    // 绘制图片(websocket连续传输速度比HTTP快)
+    for(var i=0; i<15; i++){
+        var img1FileData = await darw_image_to_canvas(img3);
+        socket.send(img1FileData);
+        var img2FileData = await darw_image_to_canvas(img2);
+        socket.send(img2FileData);
+        var img3FileData = await darw_image_to_canvas(img1);
+        socket.send(img3FileData);
+    }
+    socket.close();
+};
+`;
+
+function setExampleCode(code){
+    window.clock_run = false;
+    editor.value = code;
+}
+
+async function evalAsync(code) {
+    const asyncFunc = new Function(`return (async () => {` + code + `})()`);
+    return await asyncFunc();
+}
+
+function runCode() {
+    try {
+        // 获取用户输入的代码
+        const userCode = editor.value;
+
+        // 创建一个新的函数来执行用户的代码
+        // 注意：eval 可以执行任意代码，存在安全风险，请谨慎使用
+        // console.log('执行代码', userCode);
+        evalAsync(userCode).then(res => {
+            console.log('代码执行成功:', res);
+            // 显示结果或返回值
+            document.getElementById('output').value = JSON.stringify(res, null, 2);
+        }).catch(err => {
+            console.log('代码执行失败:', err);
+            document.getElementById('output').value = err;
+        });
+        // console.log(result);
+    } catch (error) {
+        console.log(error);
+        // 如果有错误发生，显示错误信息
+        document.getElementById('output').textContent = `Error: ${error.message}`;
+    }
+}
+
+setExampleCode(EXAMPLE_CLOCK);
+</script>
+
+</body>
+</html>
