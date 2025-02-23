@@ -1,3 +1,5 @@
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
 use std::{net::Ipv4Addr, str::FromStr, sync::mpsc::{channel, Receiver}, time::Duration};
 
 use anyhow::{anyhow, Result};
@@ -50,7 +52,7 @@ slint::slint!{
         in-out property <[string]> screens;
         in-out property <string> current-screen;
         in-out property <string> screen-ip;
-        in-out property <string> delay-ms: "150";
+        in-out property <string> delay-ms: "200";
 
         VerticalBox{
             HorizontalBox {

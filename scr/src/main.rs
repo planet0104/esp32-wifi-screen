@@ -41,7 +41,7 @@ const STACK_SIZE: usize = 1024 * 10;
 
 pub const WIFI_AP_SSID: &str = "ESP32-WiFiScreen";
 
-const MAX_HTTP_PAYLOAD_LEN: usize = 1024 * 120;
+const MAX_HTTP_PAYLOAD_LEN: usize = 1024 * 512;
 
 pub enum ImageCache {
     RgbImage(Box<RgbImage>),

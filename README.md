@@ -129,6 +129,7 @@ https://github.com/VirtualDisplay/Virtual-Display-Driver/releases/tag/24.12.24
 ![alt text](./images/vdd10.jpg)
 
 这个时候，打开系统屏幕设置，可看到一个虚拟的小显示器。确认选择的分辨率是正确的。
+如果修改的分辨率配置没有生效，尝试点击Virtual Display Driver托盘菜单的"Reload Driver"，或者"Disable Driver"，重新启动虚拟显示器驱动。然后在系统屏幕设置中，移动小屏位置，然后点击应用。屏幕就会刷新到修改后的分辨率。
 
 ![alt text](./images/vdd11.jpg)
 
@@ -137,6 +138,8 @@ https://github.com/VirtualDisplay/Virtual-Display-Driver/releases/tag/24.12.24
 ## 连接WiFi显示器
 
 输入WiFi显示器的IP地址，测试通过后，点击“启动”按钮即可。
+
+屏幕分辨率越大，屏幕刷新速度越慢，要适当增加延迟时间(ms)。
 
 ![alt text](./images/client0.jpg)
 

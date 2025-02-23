@@ -591,7 +591,9 @@ pub fn start_http_server() -> Result<()>{
             let mut buf = Box::new([0; MAX_HTTP_PAYLOAD_LEN]);
             ws.recv(buf.as_mut())?;
             let mut data: &[u8] = &buf[0..len];
-            
+
+            // info!("ws recv data:{}", data.len());
+
             match frame_type {
                 FrameType::Text(_) => {
                     if data.len() > 1 && data[data.len()-1] == b'\0'{
