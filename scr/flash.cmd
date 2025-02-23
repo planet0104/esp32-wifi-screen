@@ -1,0 +1,1 @@
+esptool -p COM10 --before default_reset --after hard_reset --chip esp32s2 write_flash --flash_mode dio --flash_size detect 0x10000 ./esp32-wifi-screen_no_console.bin

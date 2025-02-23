@@ -25,3 +25,10 @@ fast_image_resize = "5.1.1"
 
 [build-dependencies]
 winresource = "0.1.19"
+
+[profile.release]
+strip = true
+opt-level = "z"
+lto = true
+panic = "abort"
+codegen-units = 1

@@ -33,5 +33,4 @@ https://github.com/VirtualDisplay/Virtual-Display-Driver
 17. [OK.] 最终测试gif/jpg/lz4解码能否成功
 18. [OK.] 代码整理、上传新的github地址
 19. [OK.] 注意修改 录屏器以及USB Screen中的display config，宽高取旋转后的宽高。
-20. [ x ] 打包分为带日志版本，和不带日志版本。
-21. [ x ] WiFi屏幕的长时间稳定性测试
+20. [ x ] WiFi屏幕的长时间稳定性测试

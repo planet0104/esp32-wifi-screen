@@ -313,7 +313,7 @@ fn main() -> Result<()> {
                 tray_icon = Some(
                     TrayIconBuilder::new()
                         .with_menu(Box::new(tray_menu.clone()))
-                        .with_tooltip("tao - awesome windowing lib")
+                        .with_tooltip(APP_NAME)
                         .with_icon(icon)
                         .build()
                         .unwrap(),

@@ -3,6 +3,14 @@
  
  基于ESP32 S2开发的一个WiFi屏幕，固件提供HTTP接口、Websocket接口，以及Mqtt客户端三种方式控制屏幕显示内容。目前支持的屏幕型号有：ST7735S、ST7789/ST7789V、ST7796。测试过的屏幕包括：ST7735S 80x160、ST7735S 128x160、ST7789 240x240、ST7789 240x320、ST7789V 135x240、ST7796 320x480。
 
+ ![alt text](./images/screen0.jpg)
+
+ ![alt text](./images/screen1.jpg)
+
+ ![alt text](./images/screen2.jpg)
+
+ ![alt text](./images/screen3.jpg)
+
  ## ESP32 S2开发板
 
  ESP32 S2开发板必须是4M Flash，带2M PSRAM的版本。否则无法运行此固件。
