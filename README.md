@@ -31,7 +31,7 @@ esptool -p COM10 --before default_reset --after hard_reset --chip esp32s2 write_
 
 ![alt text](./images/setup0.jpg)
 
-然后在浏览器输入 http://192.168.72.1，打开配置界面
+然后在浏览器输入 “http://192.168.72.1” ，打开配置界面
 
 ![alt text](./images/setup1.jpg)
 
@@ -41,7 +41,7 @@ esptool -p COM10 --before default_reset --after hard_reset --chip esp32s2 write_
 
 ![alt text](./images/setup2.jpg)
 
-设置好屏幕参数后，点击“保存屏幕设置”。此时ESP32 S2会自动重启。重启后，重新连接"ESP32-WiFiScreen"热点。然后再次在浏览器输入 http://192.168.72.1，打开配置界面。
+设置好屏幕参数后，点击“保存屏幕设置”。此时ESP32 S2会自动重启。重启后，重新连接"ESP32-WiFiScreen"热点。然后再次在浏览器输入 “http://192.168.72.1” ，打开配置界面。
 
 ![alt text](./images/setup3.jpg)
 
@@ -51,7 +51,7 @@ esptool -p COM10 --before default_reset --after hard_reset --chip esp32s2 write_
 
 ![alt text](./images/setup4.jpg)
 
-再次在浏览器输入 http://192.168.72.1，打开配置界面。此时可在WiFi配置表单中，查看到设备的局域网IP地址。此时将电脑的WiFi连接到原先的路由器上。在浏览器输入设备的局域网IP地址，重新打开配置界面。
+再次在浏览器输入 “http://192.168.72.1” ，打开配置界面。此时可在WiFi配置表单中，查看到设备的局域网IP地址。此时将电脑的WiFi连接到原先的路由器上。在浏览器输入设备的局域网IP地址，重新打开配置界面。
 
 ![alt text](./images/setup5.jpg)
 
