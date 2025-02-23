@@ -9,7 +9,7 @@
 
  ## 接线方式
 
-ESP32 S2和屏幕模块的连接方式，参考在固件源码中的“接线”目录对应屏幕的接线方式说明文档。
+ESP32 S2和屏幕模块的连接方式，参考在固件源码中的“[接线](https://github.com/planet0104/esp32-wifi-screen/tree/main/scr/%E6%8E%A5%E7%BA%BF)”目录对应屏幕的接线方式说明文档。
 
 ![alt text](./images/connect.jpg)
 
@@ -81,7 +81,7 @@ esptool -p COM10 --before default_reset --after hard_reset --chip esp32s2 write_
 
 ## Nodejs、python和rust示例代码
 
-如果你要在其他编程语言中，通过代码控制，参考在固件源码中的examples目录中有nodejs、python、以及rust代码示例。
+如果你要在其他编程语言中，通过代码控制，参考在固件源码中的[examples](https://github.com/planet0104/esp32-wifi-screen/tree/main/scr/examples)目录中有nodejs、python、以及rust代码示例。
 
 # WiFi-Screen-Client
 
