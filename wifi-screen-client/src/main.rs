@@ -1,4 +1,4 @@
-#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+// #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use std::{net::Ipv4Addr, str::FromStr, sync::mpsc::{channel, Receiver}, time::Duration};
 
@@ -10,6 +10,7 @@ use recorder::start_with_config_alert;
 use rfd::{AsyncMessageDialog, MessageDialog};
 use serde::{Deserialize, Serialize};
 use slint::{spawn_local, SharedString, VecModel};
+use uploader::ImageFormat;
 use xcap::Monitor;
 
 pub const CONFIG_FILE_NAME:&str = "wifi-screen-client.ini";
@@ -32,7 +33,7 @@ use tray_icon::{
 enum UserEvent {
     TrayIconEvent(tray_icon::TrayIconEvent),
     MenuEvent(tray_icon::menu::MenuEvent),
-    UpdateConfig,
+    UpdateConfig(ImageFormat),
     UpdateStatus((String, String))
 }
 
@@ -41,17 +42,33 @@ slint::slint!{
 
     export component App inherits Window {
         title: "ESP32-WIFI-SCREEN";
-        width: 320px;
-        height: 240px;
+        min-width: 400px;
+        min-height: 300px;
         icon: @image-url("icon.png");
 
-        callback confirm(string, string, string);
+        callback confirm(string, string, string, string);
         callback test-screen(string, string);
 
         in-out property <bool> is_testing: false;
         in-out property <[string]> screens;
         in-out property <string> current-screen;
         in-out property <string> screen-ip;
+        in-out property <[string]> formats : [
+            "RGB565",
+            "JPG 100%",
+            "JPG 90%",
+            "JPG 80%",
+            "JPG 70%",
+            "JPG 60%",
+            "JPG 50%",
+            "JPG 40%",
+            "JPG 30%",
+            "JPG 20%",
+            "JPG 10%",
+            "JPG 5%",
+            "GIF"
+        ];
+        in-out property <string> current-format: "JPG 30%";
         in-out property <string> delay-ms: "200";
 
         VerticalBox{
@@ -59,6 +76,7 @@ slint::slint!{
                 Text {
                     vertical-alignment: center;
                     text: "选择显示器:";
+                    min-width: 70px;
                 }
                 ComboBox {
                     model: screens;
@@ -69,6 +87,7 @@ slint::slint!{
                 Text {
                     vertical-alignment: center;
                     text: "WiFi屏幕IP:";
+                    min-width: 70px;
                 }
                 LineEdit {
                     text <=> screen-ip;
@@ -78,7 +97,19 @@ slint::slint!{
             HorizontalBox {
                 Text {
                     vertical-alignment: center;
+                    text: "传输格式:";
+                    min-width: 70px;
+                }
+                ComboBox {
+                    model: formats;
+                    current-value <=> current-format;
+                }
+            }
+            HorizontalBox {
+                Text {
+                    vertical-alignment: center;
                     text: "截屏延迟:";
+                    min-width: 70px;
                 }
                 LineEdit {
                     text <=> delay-ms;
@@ -90,7 +121,7 @@ slint::slint!{
                     enabled: !is_testing;
                     text: "启动";
                     clicked => {
-                        confirm(current-screen, screen-ip, delay-ms)
+                        confirm(current-screen, screen-ip, current-format, delay-ms)
                     }
                 }
                 Button{
@@ -109,7 +140,7 @@ fn run_setting_window(receiver: Receiver<String>, proxy: tao::event_loop::EventL
     let app = App::new()?;
     let app_clone = app.as_weak();
 
-    app.on_confirm(move |screen, ip, delay_ms|{
+    app.on_confirm(move |screen, ip, format, delay_ms|{
         //验证ip
         let ip = ip.to_string();
         let delay_ms = delay_ms.to_string();
@@ -128,9 +159,24 @@ fn run_setting_window(receiver: Receiver<String>, proxy: tao::event_loop::EventL
 
         //保存配置文件
         let proxy_clone = proxy.clone();
+        let format_name = format.to_string();
+
         let _ = spawn_local(async move {
-            let _ = save_config(screen.to_string(), ip, delay_ms).await;
-            let _ = proxy_clone.send_event(UserEvent::UpdateConfig);
+            let _ = save_config(screen.to_string(), ip, format_name.clone(), delay_ms).await;
+            let format = if format_name == "GIF"{
+                ImageFormat::GIF
+            }else if format_name.starts_with("JPG"){
+                let quality = match format_name
+                .replace("JPG ", "")
+                .replace("%", "").parse::<u8>(){
+                    Err(_) => 30,
+                    Ok(q) => q
+                };
+                ImageFormat::JPG(quality)
+            }else{
+                ImageFormat::Rgb565Lz4Compressed
+            };
+            let _ = proxy_clone.send_event(UserEvent::UpdateConfig(format));
         });
 
         let _ = app_clone.upgrade_in_event_loop(|app|{
@@ -191,9 +237,10 @@ fn run_setting_window(receiver: Receiver<String>, proxy: tao::event_loop::EventL
         //读取配置文件
         let app_clone = app.as_weak();
         let _ = spawn_local(async move {
-            if let Ok((width, height, ip, delay_ms)) = load_config().await{
+            if let Ok((width, height, ip, format, delay_ms)) = load_config().await{
                 let _ = app_clone.upgrade_in_event_loop(move |app|{
                     app.set_screen_ip(ip.into());
+                    app.set_current_format(format.into());
                     app.set_delay_ms(format!("{delay_ms}").into());
                 });
                 //匹配屏幕
@@ -333,9 +380,9 @@ fn main() -> Result<()> {
             Event::UserEvent(UserEvent::TrayIconEvent(_event)) => {
                 // println!("TrayIconEvent {event:?}");
             }
-            Event::UserEvent(UserEvent::UpdateConfig) => {
+            Event::UserEvent(UserEvent::UpdateConfig(format)) => {
                 println!("update config");
-                start_with_config_alert();
+                start_with_config_alert(format);
             }
             Event::UserEvent(UserEvent::UpdateStatus((recorder_status, uploader_status))) => {
                 // println!("接收recorder_status:{recorder_status}");
@@ -372,7 +419,7 @@ fn load_icon() -> Result<tray_icon::Icon> {
     Ok(icon)
 }
 
-async fn save_config(screen_config: String, ip: String, delay_ms: u64) -> Result<()>{
+async fn save_config(screen_config: String, ip: String, format:String, delay_ms: u64) -> Result<()>{
     let screen = screen_config.replace("显示器", "");
     let screen_size:Vec<&str> = screen.split("x").collect();
     if screen_size.len() != 2{
@@ -384,6 +431,7 @@ async fn save_config(screen_config: String, ip: String, delay_ms: u64) -> Result
     conf.with_section(None::<String>).set("screen_width", format!("{screen_width}"));
     conf.with_section(None::<String>).set("screen_height", format!("{screen_height}"));
     conf.with_section(None::<String>).set("ip", format!("{ip}"));
+    conf.with_section(None::<String>).set("format", format!("{format}"));
     conf.with_section(None::<String>).set("delay_ms", format!("{delay_ms}"));
     let mut file_content = vec![];
     conf.write_to(&mut file_content)?;
@@ -437,7 +485,7 @@ async fn test_screen(screen_config: String, ip: String) -> Result<()>{
     Ok(())
 }
 
-pub async fn load_config() -> Result<(u32, u32, String, u64)>{
+pub async fn load_config() -> Result<(u32, u32, String, String, u64)>{
     let mut f = File::open(CONFIG_FILE_NAME).await?;
     let mut data = vec![];
     f.read_to_end(&mut data).await?;
@@ -472,11 +520,17 @@ pub async fn load_config() -> Result<(u32, u32, String, u64)>{
         }
         Some(v) => v
     };
+    let format = match conf.get_from(None::<String>, "format"){
+        None => {
+            "JPG 30%"
+        }
+        Some(v) => v
+    };
     let _ = Ipv4Addr::from_str(&ip)?;
     let width: u32 = screen_width.parse()?;
     let height: u32 = screen_height.parse()?;
 
-    Ok((width, height, ip.to_string(), delay_ms))
+    Ok((width, height, ip.to_string(), format.to_string(), delay_ms))
 }
 
 fn show_alert(msg:&str){

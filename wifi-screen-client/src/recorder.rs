@@ -6,13 +6,14 @@ use once_cell::sync::Lazy;
 use uuid::Uuid;
 use xcap::Monitor;
 
-use crate::{show_alert_async, uploader, CONFIG_FILE_NAME};
+use crate::{show_alert_async, uploader::{self, ImageFormat, SendImage}, CONFIG_FILE_NAME};
 
 #[derive(Default)]
 pub struct Config{
     pub monitor: Option<Monitor>,
     // pub recorder: Option<Arc<VideoRecorder>>,
     pub recorder: Option<String>,
+    pub format: ImageFormat,
 }
 
 unsafe impl Sync for Config{}
@@ -22,16 +23,19 @@ pub static CONFIG: Lazy<RwLock<Config>> = Lazy::new(|| {
     RwLock::new(Config::default())
 });
 
-pub fn start_with_config_alert(){
+pub fn start_with_config_alert(format: ImageFormat){
+    println!("启动录屏:{:?}...",format);
     std::thread::spawn(move ||{
-        if let Err(err) = start_with_config_sync(){
+        if let Err(err) = start_with_config_sync(format.clone()){
             show_alert_async(&format!("启动失败:{}", err.root_cause()));
+        }else{
+            println!("启动录屏成功:{:?}",format);
         }
     });
 }
 
 /// 读取配置文件，并开始录制屏幕
-pub fn start_with_config_sync() -> Result<()>{
+pub fn start_with_config_sync(format: ImageFormat) -> Result<()>{
     let conf = Ini::load_from_file(CONFIG_FILE_NAME)?;
     let screen_width = match conf.get_from(None::<String>, "screen_width"){
         None => {
@@ -81,12 +85,12 @@ pub fn start_with_config_sync() -> Result<()>{
         Some(m) => m
     };
     println!("启动录屏...");
-    start_record(Some(m))?;
+    start_record(Some(m), format)?;
     println!("录屏启动成功.");
     Ok(())
 }
 
-pub fn start_record(monitor: Option<Monitor>) -> Result<()>{
+pub fn start_record(monitor: Option<Monitor>, format: ImageFormat) -> Result<()>{
     //先结束原有录制
     let _ = stop_record();
     let uuid = Uuid::new_v4().to_string();
@@ -95,13 +99,14 @@ pub fn start_record(monitor: Option<Monitor>) -> Result<()>{
     }
 
     let mut config = CONFIG.write().map_err(|err| anyhow!("{err:?}"))?;
+    config.format = format;
     if let Some(monitor) = monitor{
-        open_recorder(&monitor, uuid)?;
+        open_recorder(&monitor, uuid, config.format.clone())?;
         config.monitor = Some(monitor.clone());
     }else{
         //启动原有的monitor
         if let Some(monitor) = config.monitor.as_ref(){
-            open_recorder(monitor, uuid)?;
+            open_recorder(monitor, uuid, config.format.clone())?;
         }else{
             return Err(anyhow!("未设置显示器!"));
         }
@@ -110,14 +115,16 @@ pub fn start_record(monitor: Option<Monitor>) -> Result<()>{
 }
 
 pub fn stop_record() -> Result<()>{
+    println!("锁定CONFIG...");
     let mut config = CONFIG.write().map_err(|err| anyhow!("{err:?}"))?;
     if let Some(_) = config.recorder.take(){
         // r.stop()?;
     }
+    println!("结束录制 OK.");
     Ok(())
 }
 
-fn open_recorder(monitor: &Monitor, uuid: String) -> Result<()>{
+fn open_recorder(monitor: &Monitor, uuid: String, format: ImageFormat) -> Result<()>{
     println!("显示器大小:{}x{} {}x{}", monitor.x(), monitor.y(), monitor.width(), monitor.height());
     // let ip = "192.168.121.226";
     // let url = format!("ws://{ip}/ws");
@@ -171,7 +178,9 @@ fn open_recorder(monitor: &Monitor, uuid: String) -> Result<()>{
                                 (-1, -1)
                             }
                         };
-                        let _ = uploader::send_message(uploader::Message::Image((image, x, y)));
+                        let _ = uploader::send_message(uploader::Message::Image(SendImage{
+                            image, mouse_x: x, mouse_y: y, format: format.clone()
+                        }));
                         continue;
                     }
                 }

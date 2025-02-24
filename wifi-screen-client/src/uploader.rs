@@ -1,18 +1,40 @@
-use std::{net::TcpStream, sync::Mutex, time::{Duration, Instant}};
+use std::{io::Cursor, net::TcpStream, sync::Mutex, time::{Duration, Instant}};
 
 use crossbeam_channel::{bounded, Receiver, Sender};
 use fast_image_resize::{images::Image, Resizer};
-use image::{buffer::ConvertBuffer, imageops::overlay, RgbImage, RgbaImage};
+use image::{buffer::ConvertBuffer, codecs::jpeg::JpegEncoder, imageops::overlay, RgbImage, RgbaImage};
 use once_cell::sync::Lazy;
 use anyhow::{anyhow, Result};
 use tungstenite::{connect, stream::MaybeTlsStream, WebSocket};
 
 use crate::{rgb565::rgb888_to_rgb565_be, DisplayConfig};
 
+#[derive(Debug, Clone)]
+pub enum ImageFormat{
+    Rgb565Lz4Compressed,
+    RGB565,
+    JPG(u8),
+    PNG,
+    GIF
+}
+
+impl Default for ImageFormat{
+    fn default() -> Self {
+        ImageFormat::JPG(30)
+    }
+}
+
+pub struct SendImage{
+    pub image: RgbaImage,
+    pub mouse_x: i32,
+    pub mouse_y: i32,
+    pub format:ImageFormat
+}
+
 pub enum Message{
-    SetIp(String),
+    SetIp((String, ImageFormat)),
     //(image, mouse_x, mouse_y)
-    Image((RgbaImage, i32, i32))
+    Image(SendImage)
 }
 
 #[derive(Debug, Clone)]
@@ -115,13 +137,15 @@ fn start(receiver: Receiver<Message>){
 
     let mut display_config = None;
     let mut connected = false;
+    let mut format = ImageFormat::JPG(30);
     
     loop{
         match receiver.recv(){
             Ok(msg) => {
                 match msg{
-                    Message::SetIp(ip) => {
+                    Message::SetIp((ip, fmt)) => {
                         screen_ip = ip.clone();
+                        format = fmt.clone();
                         if let Ok(cfg) = get_display_config(&ip){
                             display_config = Some(cfg);
                         }else{
@@ -130,12 +154,13 @@ fn start(receiver: Receiver<Message>){
                         println!("接收到 serverIP...");
                         connected = connect_socket(ip, &mut socket).is_ok();
                     }
-                    Message::Image((mut image, mouse_x, mouse_y)) => {
+                    Message::Image(mut image) => {
+                        format = image.format.clone();
                         //draw mouse
                         let delay_ms = {
                             if let Ok(mut cfg) = CONFIG.try_lock(){
-                                if mouse_x > 0 && mouse_y > 0{
-                                    overlay(&mut image, &cfg.0.pointer_image, mouse_x as i64, mouse_y as i64);
+                                if image.mouse_x > 0 && image.mouse_y > 0{
+                                    overlay(&mut image.image, &cfg.0.pointer_image, image.mouse_x as i64, image.mouse_y as i64);
                                 }
                                 cfg.0.status = if connected{
                                     Status::Connected
@@ -160,7 +185,7 @@ fn start(receiver: Receiver<Message>){
                                     std::thread::sleep(Duration::from_secs(3));
                                     let screen_ip_clone = screen_ip.clone();
                                     std::thread::spawn(move ||{
-                                        let r = send_message(Message::SetIp(screen_ip_clone));
+                                        let r = send_message(Message::SetIp((screen_ip_clone, format.clone())));
                                         println!("重新连接 SetIp {r:?}...");
                                     });
                                 }
@@ -182,16 +207,37 @@ fn start(receiver: Receiver<Message>){
                             if let Some(s) = socket.as_mut(){
                                 let t1 = Instant::now();
                                 //压缩
-                                let img = match fast_resize(&mut image, dst_width, dst_height){
+                                let img = match fast_resize(&mut image.image, dst_width, dst_height){
                                     Ok(v) => v,
                                     Err(err) => {
                                         eprintln!("图片压缩失败:{}", err.root_cause());
                                         continue;
                                     }
                                 };
-                                let out = rgb888_to_rgb565_be(&img, img.width() as usize, img.height() as usize);
-                                let out = lz4_flex::compress_prepend_size(&out);
-                                println!("resize+转rgb565+lz4压缩:{}ms {}bytes {}x{}", t1.elapsed().as_millis(), out.len(), img.width(), img.height());
+
+                                let out = match &format{
+                                    ImageFormat::Rgb565Lz4Compressed | ImageFormat::RGB565 => {
+                                        let out = rgb888_to_rgb565_be(&img, img.width() as usize, img.height() as usize);
+                                        lz4_flex::compress_prepend_size(&out)
+                                    }
+                                    ImageFormat::JPG(quality) => {
+                                        let mut out = vec![];
+                                        let mut encoder = JpegEncoder::new_with_quality(&mut out, *quality);
+                                        if let Err(err) = encoder.encode_image(&img){
+                                            println!("jpg 编码失败:{err:?}");
+                                        }
+                                        out
+                                    }
+                                    ImageFormat::GIF | ImageFormat::PNG => {
+                                        let mut bytes: Vec<u8> = Vec::new();
+                                        if let Err(err) = img.write_to(&mut Cursor::new(&mut bytes), image::ImageFormat::Gif){
+                                            println!("gif 编码失败:{err:?}");
+                                        }
+                                        bytes
+                                    }
+                                };
+
+                                println!("类型{:?}:{}ms {}bytes {}x{}", image.format, t1.elapsed().as_millis(), out.len(), img.width(), img.height());
 
                                 //发送
                                 let ret1 = s.write(tungstenite::Message::Binary(out.into()));
@@ -212,8 +258,9 @@ fn start(receiver: Receiver<Message>){
                             if screen_ip.len() > 0{
                                 std::thread::sleep(Duration::from_secs(3));
                                 let screen_ip_clone = screen_ip.clone();
+                                let format_clone = format.clone();
                                 std::thread::spawn(move ||{
-                                    let r = send_message(Message::SetIp(screen_ip_clone));
+                                    let r = send_message(Message::SetIp((screen_ip_clone, format_clone)));
                                     println!("重新连接 SetIp {r:?}...");
                                 });
                             }
