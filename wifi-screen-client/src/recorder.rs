@@ -1,228 +1,296 @@
-use std::{net::Ipv4Addr, str::FromStr, sync::RwLock, time::Duration};
+//启动录屏
 
+//结束录屏
+
+use std::{io::Cursor, net::TcpStream, sync::{Arc, Mutex}, time::{Duration, Instant}};
 use anyhow::{anyhow, Result};
-use ini::Ini;
+use fast_image_resize::{images::Image, Resizer};
+use image::{buffer::ConvertBuffer, codecs::jpeg::JpegEncoder, RgbImage, RgbaImage};
 use once_cell::sync::Lazy;
-use uuid::Uuid;
+use tungstenite::{stream::MaybeTlsStream, WebSocket};
 use xcap::Monitor;
 
-use crate::{show_alert_async, uploader::{self, ImageFormat, SendImage}, CONFIG_FILE_NAME};
+use crate::{rgb565::rgb888_to_rgb565_be, show_alert_async, DisplayConfig};
 
-#[derive(Default)]
-pub struct Config{
-    pub monitor: Option<Monitor>,
-    // pub recorder: Option<Arc<VideoRecorder>>,
-    pub recorder: Option<String>,
-    pub format: ImageFormat,
+#[allow(unused)]
+#[derive(Debug, Clone)]
+pub enum ImageFormat{
+    Rgb565Lz4Compressed,
+    RGB565,
+    JPG(u8),
+    PNG,
+    GIF
 }
 
-unsafe impl Sync for Config{}
-unsafe impl Send for Config {}
+impl Default for ImageFormat{
+    fn default() -> Self {
+        ImageFormat::JPG(30)
+    }
+}
 
-pub static CONFIG: Lazy<RwLock<Config>> = Lazy::new(|| {
-    RwLock::new(Config::default())
+#[derive(Debug, Clone)]
+pub enum Status{
+    Connected,
+    ConnectFail,
+    Disconnected,
+    Connecting,
+}
+
+#[derive(Clone, Debug)]
+pub struct RecorderConfig{
+    pub ip: String,
+    pub format: ImageFormat,
+    pub display_config: DisplayConfig,
+    pub monitor_width: i32,
+    pub monitor_height: i32,
+    pub delay_ms: u64,
+}
+
+pub struct Recorder{
+    pub config: Option<RecorderConfig>,
+    pub monitor_status: Status,
+    pub websocket_status: Status,
+    pub pointer_image: RgbaImage,
+}
+
+static RECORDER: Lazy<Arc<Mutex<Recorder>>> = Lazy::new(|| {
+    let cfg = Arc::new(Mutex::new(Recorder{
+        config:None,
+        monitor_status: Status::Disconnected,
+        websocket_status: Status::Disconnected,
+        pointer_image: image::load_from_memory(include_bytes!("../mouse_pointer.png")).unwrap().to_rgba8(),
+    }));
+    let cfg_clone = cfg.clone();
+    std::thread::spawn(move ||{
+        run_recorder(cfg_clone)
+    });
+    cfg
 });
 
-pub fn start_with_config_alert(format: ImageFormat){
-    println!("启动录屏:{:?}...",format);
+pub fn start_with_config_alert(config: RecorderConfig){
+    println!("启动录屏:{:?}...", config);
     std::thread::spawn(move ||{
-        if let Err(err) = start_with_config_sync(format.clone()){
+        if let Err(err) = set_config_sync(Some(config)){
             show_alert_async(&format!("启动失败:{}", err.root_cause()));
         }else{
-            println!("启动录屏成功:{:?}",format);
+            println!("启动录屏成功..");
         }
     });
 }
 
-/// 读取配置文件，并开始录制屏幕
-pub fn start_with_config_sync(format: ImageFormat) -> Result<()>{
-    let conf = Ini::load_from_file(CONFIG_FILE_NAME)?;
-    let screen_width = match conf.get_from(None::<String>, "screen_width"){
-        None => {
-            return Err(anyhow!("配置文件缺少screen_width"));
-        }
-        Some(v) => v
-    };
-    let screen_height = match conf.get_from(None::<String>, "screen_height"){
-        None => {
-            return Err(anyhow!("配置文件缺少screen_height"));
-        }
-        Some(v) => v
-    };
-    let ip = match conf.get_from(None::<String>, "ip"){
-        None => {
-            return Err(anyhow!("配置文件缺少ip"));
-        }
-        Some(v) => v
-    };
-    let delay_ms = match conf.get_from(None::<String>, "delay_ms"){
-        None => {
-            150
-        }
-        Some(v) => {
-            match v.parse::<u64>(){
-                Ok(v) => v,
-                Err(_) => 150,
+pub fn set_config_sync(config: Option<RecorderConfig>) -> Result<()>{
+    println!("set_config_sync 001.");
+    let mut recorder = RECORDER.lock().map_err(|err| anyhow!("{err:?}"))?;
+    recorder.config = config;
+    println!("set_config_sync 002.");
+    Ok(())
+}
+
+pub fn get_status_sync() -> Result<(Status, Status)>{
+    let recorder = RECORDER.try_lock().map_err(|err| anyhow!("{err:?}"))?;
+    Ok((recorder.monitor_status.clone(), recorder.websocket_status.clone()))
+}
+
+fn run_recorder(recorder: Arc<Mutex<Recorder>>) -> !{
+    let mut monitor = None;
+    let mut socket: Option<WebSocket<MaybeTlsStream<TcpStream>>> = None;
+    let mut server_ip = String::new();
+    let mut monitor_width = 0;
+    let mut monitor_height = 0;
+
+    let mut sleep_duration = Duration::from_millis(3000);
+    
+    loop{
+        //尝试锁定，锁定失败延迟
+        // println!("recorder loop...");
+        std::thread::sleep(sleep_duration);
+
+        {
+            if let Ok(mut recorder) = recorder.lock() {
+                //更新状态
+                let config = match recorder.config.clone(){
+                    None => {
+                        println!("没有配置...");
+                        //配置删除，结束录制
+                        recorder.monitor_status = Status::Disconnected;
+                        recorder.websocket_status = Status::Disconnected;
+                        let _ = monitor.take();
+                        let _ = socket.take();
+                        sleep_duration = Duration::from_millis(3000);
+                        continue;
+                    }
+                    Some(c) => c
+                };
+    
+                // ip地址变更，重新连接socket
+                if (server_ip.len() > 0 && server_ip != config.ip) || server_ip.len() == 0{
+                    recorder.websocket_status = Status::Disconnected;
+                    let _ = socket.take();
+                    server_ip = config.ip.clone();
+                    println!("更新了IP:{server_ip}...");
+                    sleep_duration = Duration::from_millis(3000);
+                    continue;
+                }
+    
+                if socket.is_none(){
+                    //连接socket
+                    recorder.websocket_status = Status::Connecting;
+                    let url = format!("ws://{server_ip}/ws");
+                    println!("开始连接:{url}");
+                    if let Ok((s, _resp)) = tungstenite::connect(url){
+                        socket = Some(s);
+                        recorder.websocket_status = Status::Connected;
+                        println!("连接成功{server_ip}..");
+                    }else{
+                        recorder.websocket_status = Status::ConnectFail;
+                        println!("连接失败{server_ip}..");
+                        let _ = socket.take();
+                        sleep_duration = Duration::from_millis(3000);
+                        continue;
+                    }
+                }
+    
+                let soc = socket.as_mut().unwrap();
+    
+                // 显示变更，重新连接显示器
+                let m = match 
+                if monitor_width != config.monitor_width || monitor_height != config.monitor_height{
+                    monitor_width = config.monitor_width;
+                    monitor_height = config.monitor_height;
+                    monitor = find_monitor(monitor_width, monitor_height);
+                    monitor.as_ref()
+                }else{
+                    monitor.as_ref()
+                }{
+                    None => {
+                        println!("monitor未找到...");
+                        recorder.monitor_status = Status::Disconnected;
+                        sleep_duration = Duration::from_millis(3000);
+                        continue;
+                    }
+                    Some(m) => {
+                        recorder.monitor_status = Status::Connected;
+                        m
+                    }
+                };
+    
+                //尝试截屏，截屏失败后重新连接显示器
+                let mut image = match m.capture_image(){
+                    Ok(img) => img,
+                    Err(_err) => {
+                        println!("monitor截图失败...");
+                        recorder.monitor_status = Status::Disconnected;
+                        let _ = monitor.take();
+                        sleep_duration = Duration::from_millis(3000);
+                        continue;
+                    }
+                };
+    
+                //压缩
+                let monitor_left = m.x();
+                let monitor_top = m.y();
+                let monitor_right = monitor_left + m.width() as i32;
+                let monitor_bottom = monitor_top + m.height() as i32;
+    
+                let position = mouse_position::mouse_position::Mouse::get_mouse_position();
+                let (mouse_x, mouse_y) = match position {
+                    mouse_position::mouse_position::Mouse::Position { x, y } => {
+                        if x >= monitor_left && x<monitor_right
+                        && y >= monitor_top && y<monitor_bottom{
+                            ( x - monitor_left, y - monitor_top )
+                        }else{
+                            (-1, -1)
+                        }
+                    },
+                    mouse_position::mouse_position::Mouse::Error => {
+                        (-1, -1)
+                    }
+                };
+                
+                if mouse_x > 0 && mouse_y > 0{
+                    image::imageops::overlay(&mut image, &recorder.pointer_image, mouse_x as i64, mouse_y as i64);
+                }
+    
+                let t1 = Instant::now();
+    
+                let (dst_width, dst_height) = (config.display_config.rotated_width, config.display_config.rotated_height);
+                
+                let img = match fast_resize(&mut image, dst_width, dst_height){
+                    Ok(v) => v,
+                    Err(err) => {
+                        eprintln!("图片压缩失败:{}", err.root_cause());
+                        continue;
+                    }
+                };
+    
+                let out = match &config.format{
+                    ImageFormat::Rgb565Lz4Compressed | ImageFormat::RGB565 => {
+                        let out = rgb888_to_rgb565_be(&img, img.width() as usize, img.height() as usize);
+                        lz4_flex::compress_prepend_size(&out)
+                    }
+                    ImageFormat::JPG(quality) => {
+                        let mut out = vec![];
+                        let mut encoder = JpegEncoder::new_with_quality(&mut out, *quality);
+                        if let Err(err) = encoder.encode_image(&img){
+                            println!("jpg 编码失败:{err:?}");
+                        }
+                        out
+                    }
+                    ImageFormat::GIF | ImageFormat::PNG => {
+                        let mut bytes: Vec<u8> = Vec::new();
+                        if let Err(err) = img.write_to(&mut Cursor::new(&mut bytes), image::ImageFormat::Gif){
+                            println!("gif 编码失败:{err:?}");
+                        }
+                        bytes
+                    }
+                };
+    
+                println!("类型{:?}:{}ms {}bytes {}x{}", config.format, t1.elapsed().as_millis(), out.len(), img.width(), img.height());
+    
+                //发送
+                let ret1 = soc.write(tungstenite::Message::Binary(out.into()));
+                let ret2 = soc.flush();
+                if ret1.is_err() && ret2.is_err(){
+                    recorder.websocket_status = Status::Disconnected;
+                    let _ = socket.take();
+                    sleep_duration = Duration::from_millis(3000);
+                    continue;
+                }
+                sleep_duration = Duration::from_millis(config.delay_ms);
             }
         }
-    };
-    let _ = Ipv4Addr::from_str(&ip)?;
-    let width: u32 = screen_width.parse()?;
-    let height: u32 = screen_height.parse()?;
-    uploader::send_message(uploader::Message::SetIp(ip.to_string()))?;
-    uploader::set_delay_ms(delay_ms)?;
+    }
+}
+
+fn find_monitor(width: i32, height: i32) -> Option<Monitor>{
     //找到显示器
-    let monitors = Monitor::all()?;
+    let monitors = match Monitor::all(){
+        Err(_err) => return None,
+        Ok(list) => list
+    };
     let mut find_monitor = None;
     for m in monitors{
-        if m.width() == width && m.height() == height{
+        if m.width() as i32 == width && m.height() as i32 == height{
             find_monitor = Some(m);
             break;
         }
     }
-    let m = match find_monitor{
-        None => return Err(anyhow!("未找到{width}x{height}分辨率的显示器")),
-        Some(m) => m
-    };
-    println!("启动录屏...");
-    start_record(Some(m), format)?;
-    println!("录屏启动成功.");
-    Ok(())
+    find_monitor
 }
 
-pub fn start_record(monitor: Option<Monitor>, format: ImageFormat) -> Result<()>{
-    //先结束原有录制
-    let _ = stop_record();
-    let uuid = Uuid::new_v4().to_string();
-    {
-        CONFIG.write().map_err(|err| anyhow!("{err:?}"))?.recorder = Some(uuid.clone());
-    }
-
-    let mut config = CONFIG.write().map_err(|err| anyhow!("{err:?}"))?;
-    config.format = format;
-    if let Some(monitor) = monitor{
-        open_recorder(&monitor, uuid, config.format.clone())?;
-        config.monitor = Some(monitor.clone());
+fn fast_resize(src: &mut RgbaImage, dst_width: u32, dst_height: u32) -> Result<RgbImage>{
+    let mut dst_image = Image::new(
+        dst_width,
+        dst_height,
+        fast_image_resize::PixelType::U8x3,
+    );
+    let mut src:RgbImage = src.convert();
+    if src.width() != dst_width || src.height() != dst_height{
+        let v = Image::from_slice_u8(src.width(), src.height(), src.as_mut(), fast_image_resize::PixelType::U8x3)?;
+        let mut resizer = Resizer::new();
+        resizer.resize(&v, &mut dst_image, None)?;
+        Ok(RgbImage::from_raw(dst_image.width(), dst_image.height(), dst_image.buffer().to_vec()).unwrap())
     }else{
-        //启动原有的monitor
-        if let Some(monitor) = config.monitor.as_ref(){
-            open_recorder(monitor, uuid, config.format.clone())?;
-        }else{
-            return Err(anyhow!("未设置显示器!"));
-        }
+        Ok(src.convert())
     }
-    Ok(())
-}
-
-pub fn stop_record() -> Result<()>{
-    println!("锁定CONFIG...");
-    let mut config = CONFIG.write().map_err(|err| anyhow!("{err:?}"))?;
-    if let Some(_) = config.recorder.take(){
-        // r.stop()?;
-    }
-    println!("结束录制 OK.");
-    Ok(())
-}
-
-fn open_recorder(monitor: &Monitor, uuid: String, format: ImageFormat) -> Result<()>{
-    println!("显示器大小:{}x{} {}x{}", monitor.x(), monitor.y(), monitor.width(), monitor.height());
-    // let ip = "192.168.121.226";
-    // let url = format!("ws://{ip}/ws");
-    // println!("开始连接:{url}");
-    // let mut socket = if let Ok((s, _resp)) = connect(url){
-    //     // let _ = set_status(None, Status::Connected);
-    //     println!("连接成功{ip}..");
-    //     s
-    // }else{
-    //     println!("连接失败{ip}..");
-    //     // let _ = set_status(None, Status::ConnectFail);
-    //     return "".to_string();
-    // };
-
-    // let video_recorder = Arc::new(monitor.video_recorder()?);
-    // let video_recorder_clone = video_recorder.clone();
-    let monitor_left = monitor.x();
-    let monitor_top = monitor.y();
-    let monitor_right = monitor_left + monitor.width() as i32;
-    let monitor_bottom = monitor_top + monitor.height() as i32;
-    
-    std::thread::spawn(move ||{
-        println!("启动录屏线程...");
-        loop{
-            if let Ok(cfg) = CONFIG.try_read(){
-                match cfg.recorder.as_ref(){
-                    Some(id)=>{
-                        if id != &uuid{
-                            eprintln!("uuid不符, 线程结束!");
-                            break;
-                        }
-                    }
-                    None => {
-                        std::thread::sleep(Duration::from_millis(100));
-                        continue;
-                    }
-                }
-                if let Some(monitor) = cfg.monitor.as_ref(){
-                    if let Ok(image) = monitor.capture_image(){
-                        let position = mouse_position::mouse_position::Mouse::get_mouse_position();
-                        let (x, y) = match position {
-                            mouse_position::mouse_position::Mouse::Position { x, y } => {
-                                if x >= monitor_left && x<monitor_right
-                                && y >= monitor_top && y<monitor_bottom{
-                                    ( x - monitor_left, y - monitor_top )
-                                }else{
-                                    (-1, -1)
-                                }
-                            },
-                            mouse_position::mouse_position::Mouse::Error => {
-                                (-1, -1)
-                            }
-                        };
-                        let _ = uploader::send_message(uploader::Message::Image(SendImage{
-                            image, mouse_x: x, mouse_y: y, format: format.clone()
-                        }));
-                        continue;
-                    }
-                }
-            }
-            std::thread::sleep(Duration::from_millis(5));
-        }
-
-        /*
-        let _ = video_recorder_clone.on_frame(move |f|{
-            
-            let stride = f.raw.len() / f.height as usize;
-            let mut buffer = Vec::with_capacity(f.width as usize*f.height as usize * 4);
-            for row in f.raw.chunks(stride){
-                let row_buf_len = f.width as usize * 4;
-                if row.len() >= row_buf_len{
-                    buffer.extend_from_slice(&row[0..row_buf_len]);
-                }
-            }
-            let img = match RgbaImage::from_raw(f.width, f.height, buffer){
-                None => {
-                    return Ok(());
-                },
-                Some(f) => f
-            };
-            // println!("录屏数据:{}x{}", img.width(), img.height());
-            let position = mouse_position::mouse_position::Mouse::get_mouse_position();
-            match position {
-                mouse_position::mouse_position::Mouse::Position { x, y } => {
-                    if x >= monitor_left && x<monitor_right
-                    && y >= monitor_top && y<monitor_bottom{
-                        let (x, y) = ( x - monitor_left, y - monitor_top );
-                        println!("鼠标在显示器区域!! {x}x{y}");
-                    }
-                },
-                mouse_position::mouse_position::Mouse::Error => println!("Error getting mouse position"),
-            }
-            let _ = uploader::try_send_message(uploader::Message::Image(img));
-            Ok(())
-        });
-         */
-        println!("录屏线程结束...");
-    });
-    // video_recorder.start()?;
-    Ok(())
 }

@@ -1,4 +1,4 @@
-// #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use std::{net::Ipv4Addr, str::FromStr, sync::mpsc::{channel, Receiver}, time::Duration};
 
@@ -6,11 +6,10 @@ use anyhow::{anyhow, Result};
 use async_std::{fs::File, io::{ReadExt, WriteExt}, task::spawn_blocking};
 use image::{codecs::jpeg::JpegEncoder, imageops::resize};
 use ini::Ini;
-use recorder::start_with_config_alert;
+use recorder::{start_with_config_alert, ImageFormat, RecorderConfig};
 use rfd::{AsyncMessageDialog, MessageDialog};
 use serde::{Deserialize, Serialize};
 use slint::{spawn_local, SharedString, VecModel};
-use uploader::ImageFormat;
 use xcap::Monitor;
 
 pub const CONFIG_FILE_NAME:&str = "wifi-screen-client.ini";
@@ -18,7 +17,6 @@ pub const APP_NAME:&str = "ESP32-WIFI-SCREEN";
 
 #[allow(dead_code)]
 mod rgb565;
-mod uploader;
 mod recorder;
 
 use tao::{
@@ -33,7 +31,7 @@ use tray_icon::{
 enum UserEvent {
     TrayIconEvent(tray_icon::TrayIconEvent),
     MenuEvent(tray_icon::menu::MenuEvent),
-    UpdateConfig(ImageFormat),
+    UpdateConfig(RecorderConfig),
     UpdateStatus((String, String))
 }
 
@@ -160,9 +158,18 @@ fn run_setting_window(receiver: Receiver<String>, proxy: tao::event_loop::EventL
         //保存配置文件
         let proxy_clone = proxy.clone();
         let format_name = format.to_string();
-
+        let app_clone = app_clone.clone();
         let _ = spawn_local(async move {
-            let _ = save_config(screen.to_string(), ip, format_name.clone(), delay_ms).await;
+            let app = match app_clone.upgrade(){
+                Some(ap) => ap,
+                None => return
+            };
+            let ret = save_config(screen.to_string(), ip.clone(), format_name.clone(), delay_ms).await;
+            if ret.is_err(){
+                show_alert("配置文件保存失败");
+                return;
+            }
+            let (screen_width, screen_height) = get_screen_size(&screen.to_string()).unwrap();
             let format = if format_name == "GIF"{
                 ImageFormat::GIF
             }else if format_name.starts_with("JPG"){
@@ -176,12 +183,29 @@ fn run_setting_window(receiver: Receiver<String>, proxy: tao::event_loop::EventL
             }else{
                 ImageFormat::Rgb565Lz4Compressed
             };
-            let _ = proxy_clone.send_event(UserEvent::UpdateConfig(format));
-        });
-
-        let _ = app_clone.upgrade_in_event_loop(|app|{
-            let _ = app.hide();
-            println!("窗口关闭... app.hide()");
+            println!("点击确认按钮，测试连接...");
+            app.set_is_testing(true);
+            match test_screen(screen.to_string(), ip.clone()).await {
+                Ok(display_config) => {
+                    app.set_is_testing(false);
+                    let _ = proxy_clone.send_event(UserEvent::UpdateConfig(RecorderConfig {
+                        ip,
+                        format,
+                        display_config,
+                        monitor_width: screen_width,
+                        monitor_height: screen_height,
+                        delay_ms
+                   }));
+                   let _ = app.hide();
+                   println!("窗口关闭... app.hide()");
+                }
+                Err(err) => {
+                    app.set_is_testing(false);
+                    println!("测试失败:{}", err.root_cause());
+                    let err = &format!("{}", err.root_cause());
+                    show_alert(err);
+                }
+            };
         });
     });
 
@@ -197,9 +221,9 @@ fn run_setting_window(receiver: Receiver<String>, proxy: tao::event_loop::EventL
                 app.set_is_testing(true);
             });
             let msg = match test_screen(screen, ip).await {
-                Ok(()) => "测试成功!",
+                Ok(_) => "测试成功!",
                 Err(err) => {
-                    eprintln!("{err:?}");
+                    eprintln!("测试失败:{}", err.root_cause());
                     &format!("{}", err.root_cause())
                 }
             };
@@ -319,32 +343,23 @@ fn main() -> Result<()> {
     let proxy = event_loop.create_proxy();
     std::thread::spawn(move ||{
         loop{
-            let recorder_status = match recorder::CONFIG.try_read(){
-                Ok(status) => {
-                    match (status.monitor.as_ref(), status.recorder.as_ref()){
-                        (Some(monitor), Some(_rec)) => format!("录屏状态: {}x{} 已启动", monitor.width(), monitor.height()),
-                        (None, None) => "录屏状态: 未启动".to_string(),
-                        (None, Some(_)) => "录屏状态: 已启动".to_string(),
-                        (Some(m), None) => format!("录屏状态: {}x{} 未启动", m.width(), m.height()),
-                    }
-                }
-                Err(err) => {
-                    eprintln!("try_lock失败: {err:?}");
-                    "录屏状态: 未知".to_string()
-                }
-            };
-            let uploader_status = match uploader::get_status(){
-                Ok(s) => {
-                    let status_name = s.status.name();
-                    format!("屏幕状态: {} {status_name}", s.ip)
-                }
-                Err(_err) => {
-                    "屏幕状态: 未知".to_string()
-                }
-            };
-            // println!("发送send_event:recorder_status={recorder_status} uploader_status={uploader_status}");
+            let (mut recorder_status, mut uploader_status) = ("录屏状态: 未知".to_string(), "屏幕状态: 未知".to_string());
+            if let Ok((monitor_status, socket_status)) = recorder::get_status_sync(){
+                recorder_status = match monitor_status{
+                        recorder::Status::Connected => format!("录屏状态: 已启动"),
+                        recorder::Status::ConnectFail => "录屏状态: 启动失败".to_string(),
+                        recorder::Status::Disconnected => "录屏状态: 未启动".to_string(),
+                        recorder::Status::Connecting => "录屏状态: 启动中".to_string(),
+                };
+                uploader_status = match socket_status{
+                        recorder::Status::Connected => format!("屏幕状态: 已连接"),
+                        recorder::Status::ConnectFail => "屏幕状态: 启动失败".to_string(),
+                        recorder::Status::Disconnected => "屏幕状态: 未启动".to_string(),
+                        recorder::Status::Connecting => "屏幕状态: 连接中".to_string(),
+                };
+            }
             let _ = proxy.send_event(UserEvent::UpdateStatus((recorder_status, uploader_status)));
-            std::thread::sleep(Duration::from_secs(2));
+            std::thread::sleep(Duration::from_secs(1));
         }
     });
 
@@ -380,9 +395,9 @@ fn main() -> Result<()> {
             Event::UserEvent(UserEvent::TrayIconEvent(_event)) => {
                 // println!("TrayIconEvent {event:?}");
             }
-            Event::UserEvent(UserEvent::UpdateConfig(format)) => {
+            Event::UserEvent(UserEvent::UpdateConfig(config)) => {
                 println!("update config");
-                start_with_config_alert(format);
+                start_with_config_alert(config);
             }
             Event::UserEvent(UserEvent::UpdateStatus((recorder_status, uploader_status))) => {
                 // println!("接收recorder_status:{recorder_status}");
@@ -419,7 +434,7 @@ fn load_icon() -> Result<tray_icon::Icon> {
     Ok(icon)
 }
 
-async fn save_config(screen_config: String, ip: String, format:String, delay_ms: u64) -> Result<()>{
+fn get_screen_size(screen_config:&str) -> Result<(i32, i32)>{
     let screen = screen_config.replace("显示器", "");
     let screen_size:Vec<&str> = screen.split("x").collect();
     if screen_size.len() != 2{
@@ -427,6 +442,11 @@ async fn save_config(screen_config: String, ip: String, format:String, delay_ms:
     }
     let screen_width:i32 = screen_size[0].parse()?;
     let screen_height:i32 = screen_size[1].parse()?;
+    Ok((screen_width, screen_height))
+}
+
+async fn save_config(screen_config: String, ip: String, format:String, delay_ms: u64) -> Result<()>{
+    let (screen_width, screen_height) = get_screen_size(&screen_config)?;
     let mut conf = Ini::new();
     conf.with_section(None::<String>).set("screen_width", format!("{screen_width}"));
     conf.with_section(None::<String>).set("screen_height", format!("{screen_height}"));
@@ -440,7 +460,7 @@ async fn save_config(screen_config: String, ip: String, format:String, delay_ms:
     Ok(())
 }
 
-async fn test_screen(screen_config: String, ip: String) -> Result<()>{
+async fn test_screen(screen_config: String, ip: String) -> Result<DisplayConfig>{
     let _ = Ipv4Addr::from_str(&ip)
     .map_err(|_err| anyhow!("错误的IP地址!"))?;
     let screen = screen_config.replace("显示器", "");
@@ -452,7 +472,13 @@ async fn test_screen(screen_config: String, ip: String) -> Result<()>{
     let screen_height:u32 = screen_size[1].parse()?;
     let ip_clone = ip.clone();
     let resp = spawn_blocking(move ||{
-        reqwest::blocking::get(&format!("http://{ip_clone}/display_config"))?
+        reqwest::blocking::Client::builder()
+        .timeout(Duration::from_secs(5))
+        .no_proxy()
+        .build()?
+        .get(&format!("http://{ip_clone}/display_config"))
+        .timeout(Duration::from_secs(5))
+        .send()?
         .json::<DisplayConfig>()
     }).await?;
     println!("屏幕大小:{}x{}", resp.rotated_width, resp.rotated_height);
@@ -476,13 +502,16 @@ async fn test_screen(screen_config: String, ip: String) -> Result<()>{
     jpg.encode_image(&img)?;
     //绘制
     let _ = spawn_blocking(move || {
-        reqwest::blocking::Client::new()
-        .post(&format!("http://{ip}/draw_image"))
-        .body(out)
+        reqwest::blocking::Client::builder()
+        .timeout(Duration::from_secs(5))
+        .no_proxy()
+        .build()?
+        .get(&format!("http://{ip}/draw_image"))
+        .timeout(Duration::from_secs(5))
         .send()?
         .text()
     }).await?;
-    Ok(())
+    Ok(resp)
 }
 
 pub async fn load_config() -> Result<(u32, u32, String, String, u64)>{
@@ -555,7 +584,7 @@ fn show_alert_async(msg:&str){
     });
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 struct DisplayConfig{
     display_type: Option<String>,
     rotated_width: u32,
