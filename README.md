@@ -29,7 +29,7 @@ ESP32 S2和屏幕模块的连接方式，参考在固件源码中的“[接线](
 
 ## 使用esptool烧录
 ```powershell
-esptool -p COM10 --before default_reset --after hard_reset --chip esp32s2 write_flash --flash_mode dio --flash_size detect 0x10000 esp32-wifi-screen.bin
+.\esptool.exe -p COM6 --before default_reset --after hard_reset --chip esp32s2 write_flash 0x1000 .\bootloader.bin 0x8000 .\partitions.bin 0x10000 esp32-wifi-screen.bin
 ```
 
 # 配置WiFi屏幕
