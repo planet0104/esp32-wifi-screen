@@ -1,6 +1,6 @@
 [package]
 name = "esp32-wifi-screen"
-version = "1.0.1"
+version = "1.0.2"
 authors = ["JiaYe <planet2@qq.com>"]
 edition = "2021"
 resolver = "2"
