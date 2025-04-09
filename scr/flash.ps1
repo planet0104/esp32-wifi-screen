@@ -8,7 +8,7 @@ $tool = "./esptool.exe"
 
 $availablePorts = [System.IO.Ports.SerialPort]::getportnames()
 
-$portsToCheck = @("COM3", "COM10")
+$portsToCheck = @("COM3", "COM10", "COM6")
 $selectPort = $portsToCheck[0];
 
 foreach ($port in $portsToCheck) {
@@ -21,6 +21,6 @@ foreach ($port in $portsToCheck) {
     }
 }
 
-& $tool -p $selectPort --before default_reset --after hard_reset --chip esp32s2 write_flash --flash_mode dio --flash_size detect 0x10000 target/xtensa-esp32s2-espidf/release/esp32-wifi-screen.bin
+& $tool -p $selectPort --before default_reset --after hard_reset --chip esp32s2 write_flash --flash_mode dio --flash_size detect 0x1000 .\bootloader.bin 0x8000 .\partitions.bin 0x10000 target/xtensa-esp32s2-espidf/release/esp32-wifi-screen.bin
 
 & ".\monitor.ps1" $selectPort
