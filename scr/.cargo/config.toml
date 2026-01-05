@@ -1,12 +1,13 @@
 [build]
 target = "xtensa-esp32s2-espidf"
+target-dir = "C:/esp/target"
 
 [target.xtensa-esp32s2-espidf]
 linker = "ldproxy"
 runner = "espflash flash --monitor"
 rustflags = [
     "--cfg",  "espidf_time64",
-    "-L", "C:/s/scr/library",  # 指定库文件的路径
+    "-L", "C:/Users/planet/Documents/GitHub/esp32-wifi-screen/scr/library",  # 指定库文件的路径
     "-l", "tjpgd" # 链接 tjpgd 库
 ]
 
@@ -17,4 +18,5 @@ build-std = ["std", "panic_abort"]
 MCU="esp32s2"
 # Note: this variable is not used by the pio builder (`cargo build --features pio`)
 ESP_IDF_VERSION = "v5.3.2"
+ESP_IDF_SDKCONFIG_DEFAULTS = { value = "sdkconfig.defaults", relative = true }
 

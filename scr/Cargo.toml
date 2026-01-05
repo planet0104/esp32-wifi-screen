@@ -24,7 +24,7 @@ experimental = ["esp-idf-svc/experimental"]
 
 [dependencies]
 log = "0.4"
-esp-idf-svc = { version = "0.51", features = ["critical-section"] }
+esp-idf-svc = { version = "0.51", features = ["critical-section", "experimental"] }
 esp-idf-hal = "0.45"
 embedded-svc = {version = "0.28.1", features = [ "use_serde" ] }
 anyhow = { version = "1", default-features = false }
