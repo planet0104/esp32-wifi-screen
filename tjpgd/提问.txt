@@ -1,1 +1,4 @@
-当前rust代码是从tjpgd_pc文件夹的c代码翻译过来的 。目前在esp32上运行发现，在调用prepare()方法之后，就卡死了。帮我检查 rust版本的 prepare()方法，跟c的prepare()方法是否流程完全一致，内存分配和占用完全一致。如果不一致帮我修复rust。要跟c代码严格一致！
+帮我修复rust问题，将rust的 prepare()、debug逻辑，严格对齐c语言版本(tjpgd_pc)，并通过 examples测试。
+
+
+再次帮我逐行对比c代码，检查rust的 prepare() 、decompress_with_buffers方法，对于内存的申请、初始化、内存占用、回调数据等，是否严格跟c语言一致！
