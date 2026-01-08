@@ -1,0 +1,23 @@
+[package]
+name = "tjpgd"
+version = "0.3.0"
+authors = ["JiaYe <planet2@qq.com>"]
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "Tiny JPEG Decompressor - A lightweight JPEG decoder optimized for embedded systems"
+repository = "https://github.com/planet0104/esp32-wifi-screen"
+keywords = ["jpeg", "decoder", "embedded", "no_std", "image"]
+categories = ["embedded", "multimedia::images", "no-std"]
+
+[features]
+default = ["std"]
+std = []
+fast-decode = []
+table-clip = []
+use-scale = []
+alloc-buffers = []  # Enable automatic buffer allocation in decompress() - may cause stack overflow on embedded systems
+
+[dependencies]
+heapless = "0.8"
+
+[dev-dependencies]

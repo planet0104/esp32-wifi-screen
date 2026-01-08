@@ -13,8 +13,9 @@ use crate::utils::decode_base64;
 use crate::{
     display::{draw_rgb_image_fast, rgb565_to_rgb888, DisplayManager},
     imageproc::{drawing::text_size, pixelops::weighted_sum},
-    tjpgd, with_context, Context,
+    with_context, Context,
 };
+use tjpgd::JpegDecoder;
 
 use crate::{ImageCache, WIFI_AP_SSID};
 
@@ -578,10 +579,16 @@ pub fn generate_no_wifi_name_text(display_manager: &mut DisplayManager) -> Vec<E
 
 // 绘制闪屏，日志信息
 pub fn draw_splash(ctx: &mut Context, add_elements: &[Element]) -> Result<()> {
+    log::info!("[CANVAS] draw_splash: Start");
     let display_manager = match ctx.display.as_mut() {
         Some(v) => v,
-        None => return Ok(()),
+        None => {
+            log::warn!("[CANVAS] draw_splash: No display manager, exiting");
+            return Ok(());
+        }
     };
+    
+    log::info!("[CANVAS] draw_splash: Step 1 - Creating base elements");
     let mut elements = Box::new(vec![]);
     let screen_width = display_manager.get_screen_width() as u32;
     let screen_height = display_manager.get_screen_height() as u32;
@@ -598,8 +605,13 @@ pub fn draw_splash(ctx: &mut Context, add_elements: &[Element]) -> Result<()> {
     }));
 
     //绘制logo
+    log::info!("[CANVAS] draw_splash: Step 2 - Loading logo from embedded bytes...");
     let logo = Box::new(Vec::from(include_bytes!("../monitor.jpg")));
+    log::info!("[CANVAS] draw_splash: Logo bytes loaded, size: {}", logo.len());
+    
+    log::info!("[CANVAS] draw_splash: Step 3 - Decoding logo JPG...");
     let logo = decode_jpg_to_rgb(logo)?;
+    log::info!("[CANVAS] draw_splash: Logo decoded successfully: {}x{}", logo.width(), logo.height());
 
     elements.push(Element::RawRgbImage((
         screen_width as i32 / 2 - logo.width() as i32 / 2,
@@ -661,13 +673,103 @@ pub fn draw_splash(ctx: &mut Context, add_elements: &[Element]) -> Result<()> {
 }
 
 pub fn decode_jpg_to_rgb(jpg_data: Box<Vec<u8>>) -> Result<Box<RgbImage>> {
-    let (_, w, h, pixels) = tjpgd::decode_jpg(jpg_data)?;
+    log::info!("[JPEG] Starting decode, data size: {} bytes", jpg_data.len());
+    let (w, h, pixels) = decode_jpeg_to_rgb565(&jpg_data)?;
+    log::info!("[JPEG] Decoded to RGB565: {}x{}, {} pixels", w, h, pixels.len());
+    
     let mut rgb = Vec::with_capacity(w as usize * h as usize * 3);
     for pixel in pixels.iter() {
         let (r, g, b) = rgb565_to_rgb888(pixel.to_be());
         rgb.extend_from_slice(&[r, g, b]);
     }
-    Ok(Box::new(RgbImage::from_raw(w as u32, h as u32, rgb).unwrap()))
+    
+    let img = RgbImage::from_raw(w as u32, h as u32, rgb).unwrap();
+    Ok(Box::new(img))
+}
+
+/// 使用 tjpg_decoder 解码 JPEG 为 RGB565 格式（节约内存版本）
+pub fn decode_jpeg_to_rgb565(jpeg_data: &[u8]) -> Result<(u16, u16, Box<Vec<u16>>)> {
+    log::info!("[JPEG] decode_jpeg_to_rgb565 start, input size: {} bytes", jpeg_data.len());
+    log::info!("[JPEG] Creating decoder...");
+    
+    let mut decoder = JpegDecoder::new();
+    decoder.set_swap_bytes(true);
+    log::info!("[JPEG] Decoder created, calling prepare()...");
+    
+    decoder.prepare(jpeg_data).map_err(|e| {
+        log::error!("[JPEG] prepare failed: {:?}", e);
+        anyhow!("JPEG prepare failed: {:?}", e)
+    })?;
+    log::info!("[JPEG] prepare() completed successfully");
+    
+    let width = decoder.width();
+    let height = decoder.height();
+    log::info!("[JPEG] Image size: {}x{}", width, height);
+    
+    // 计算所需的工作缓冲区大小
+    let mcu_size = decoder.mcu_buffer_size();
+    let work_size = decoder.work_buffer_size();
+    log::info!("[JPEG] Required buffers: mcu={} elements ({} bytes), work={} bytes", 
+        mcu_size, mcu_size * 2, work_size);
+    
+    // 分配工作缓冲区（使用 decompress_with_buffers 节约内存）
+    let mut mcu_buffer = vec![0i16; mcu_size];
+    let mut work_buffer = vec![0u8; work_size];
+    log::info!("[JPEG] Work buffers allocated");
+    
+    // 分配输出缓冲区 - RGB565 每个像素 2 字节
+    let output_size = width as usize * height as usize;
+    log::info!("[JPEG] Allocating output buffer: {} pixels ({} bytes)", output_size, output_size * 2);
+    let mut output = vec![0u16; output_size];
+    let fb_width = width as usize;
+    log::info!("[JPEG] Output buffer allocated");
+    
+    log::info!("[JPEG] Starting decompress_with_buffers...");
+    let mut block_count = 0;
+    decoder.decompress_with_buffers(
+        jpeg_data, 
+        0, 
+        &mut mcu_buffer,
+        &mut work_buffer,
+        &mut |_decoder, bitmap, rect| {
+        block_count += 1;
+        if block_count <= 3 || block_count % 10 == 0 {
+            log::info!("[JPEG] Block {}: rect({},{}) to ({},{}), bitmap size: {}",
+                block_count, rect.left, rect.top, rect.right, rect.bottom, bitmap.len());
+        }
+        // bitmap 已经是 RGB565 格式的字节数组
+        // 每个像素占 2 字节，所以 bitmap.len() = rect_width * rect_height * 2
+        let rect_width = (rect.right - rect.left + 1) as usize;
+        let bytes_per_row = rect_width * 2; // RGB565 每像素 2 字节
+        
+        for y in rect.top..=rect.bottom {
+            let y_offset = (y - rect.top) as usize;
+            let src_offset = y_offset * bytes_per_row;
+            let dst_row = y as usize * fb_width + rect.left as usize;
+            
+            // 检查边界
+            if src_offset + bytes_per_row <= bitmap.len() 
+               && dst_row + rect_width <= output.len() {
+                // 将 bitmap 的字节转换为 u16
+                for x in 0..rect_width {
+                    let byte_idx = src_offset + x * 2;
+                    if byte_idx + 1 < bitmap.len() {
+                        // bitmap 已经是正确的字节序（因为 set_swap_bytes(true)）
+                        let pixel = u16::from_le_bytes([bitmap[byte_idx], bitmap[byte_idx + 1]]);
+                        output[dst_row + x] = pixel;
+                    }
+                }
+            }
+        }
+        
+        Ok(true)
+    }).map_err(|e| {
+        log::error!("[JPEG] decompress_with_buffers failed at block {}: {:?}", block_count, e);
+        anyhow!("JPEG decompress failed: {:?}", e)
+    })?;
+    
+    log::info!("[JPEG] Decompress completed, total {} blocks", block_count);
+    Ok((width, height, Box::new(output)))
 }
 
 pub fn draw_splash_with_error1(err1: Option<&str>, err2: Option<&str>) -> Result<()> {
@@ -682,11 +784,15 @@ pub fn draw_splash_with_error(
 ) -> Result<()> {
     let display_manager = match ctx.display.as_mut() {
         Some(v) => v,
-        None => return Ok(()),
+        None => {
+            return Ok(());
+        }
     };
+    
     let mut elements = Box::new(vec![]);
     let font_size = 20.;
     let text_color = Color::new(1., 0., 0., 1.);
+    
     if let Some(err1) = err1 {
         let (text_width, _) = text_size(font_size, &display_manager.font, err1);
         let text_x = display_manager.get_screen_width() as i32 / 2 - text_width as i32 / 2;
@@ -698,6 +804,7 @@ pub fn draw_splash_with_error(
             color: CSSColor(text_color.clone()),
         }));
     }
+    
     if let Some(err2) = err2 {
         let (text_width, _) = text_size(font_size, &display_manager.font, err2);
         let text_x = display_manager.get_screen_width() as i32 / 2 - text_width as i32 / 2;
@@ -709,6 +816,7 @@ pub fn draw_splash_with_error(
             color: CSSColor(text_color.clone()),
         }));
     }
+    
     draw_splash(ctx, &elements)?;
     Ok(())
 }

@@ -17,6 +17,7 @@ use esp_idf_hal::{
 };
 use image::RgbImage;
 use log::info;
+use std::time::Duration;
 use mipidsi::interface::SpiInterface;
 use mipidsi::models::{Model, ST7796};
 use mipidsi::options::{ColorInversion, Orientation};
@@ -124,7 +125,9 @@ pub fn init() -> Result<()> {
     with_context(|ctx| {
         let display_config = match ctx.config.display_config.as_ref() {
             Some(c) => c,
-            None => return Err(anyhow!("display config is none!")),
+            None => {
+                return Err(anyhow!("display config is none!"));
+            }
         };
 
         check_screen_size(display_config)?;
@@ -188,6 +191,7 @@ pub fn init() -> Result<()> {
         info!("init display: y_offset:{}", display_config.y_offset);
         info!("init display: color_inversion:{}", display_config.color_inversion);
         info!("init display: with_cs:{}", display_config.with_cs);
+        info!("init display>02: Creating SPI interface...");
 
         let color_order = match display_config.color_order{
             crate::config::DisplayColorOrder::Rgb => mipidsi::options::ColorOrder::Rgb,
@@ -203,8 +207,10 @@ pub fn init() -> Result<()> {
             crate::config::DisplayRotation::Deg270 => mipidsi::options::Rotation::Deg270,
         };
 
+        info!("init display>03: Creating display interface...");
         let display_interface = match display_config.display_type {
             DisplayType::ST7735s => {
+                info!("init display>04: Creating ST7735s display...");
                 let di = create_di(true)?;
                 // st7735s 驱动
                 let display = Builder::new(ST7735s, di)
@@ -216,9 +222,11 @@ pub fn init() -> Result<()> {
                     .invert_colors(color_inversion)
                     .init(&mut delay)
                     .map_err(|err| anyhow!("{err:?}"))?;
+                info!("init display>05: ST7735s display created successfully");
                 DisplayInterface::ST7735s(display)
             }
             DisplayType::ST7796 => {
+                info!("init display>04: Creating ST7796 display...");
                 let di = create_di(true)?;
                 // st7796 驱动
                 let display = Builder::new(ST7796, di)
@@ -230,9 +238,11 @@ pub fn init() -> Result<()> {
                     .invert_colors(color_inversion)
                     .init(&mut delay)
                     .map_err(|err| anyhow!("{err:?}"))?;
+                info!("init display>05: ST7796 display created successfully");
                 DisplayInterface::ST7796(display)
             }
             DisplayType::ST7789 => {
+                info!("init display>04: Creating ST7789 display...");
                 let di = create_di(display_config.with_cs)?;
                 let display = Builder::new(ST7789, di)
                 .color_order(color_order)
@@ -243,13 +253,17 @@ pub fn init() -> Result<()> {
                 .invert_colors(color_inversion)
                 .init(&mut delay)
                 .map_err(|err| anyhow!("{err:?}"))?;
+                info!("init display>05: ST7789 display created successfully");
                 DisplayInterface::ST7789(display)
             }
         };
 
+        info!("init display>06: Loading font...");
         let font = FontRef::try_from_slice(include_bytes!("../VonwaonBitmap-12pxLite.otf"))
             .map_err(|err| anyhow!("{err:?}"))?;
+        info!("init display>07: Font loaded successfully");
 
+        info!("init display>08: Creating DisplayManager...");
         let display_manager = DisplayManager {
             display_config: display_config.clone(),
             display: display_interface,
@@ -257,8 +271,15 @@ pub fn init() -> Result<()> {
         };
 
         ctx.display.replace(display_manager);
+        info!("init display>09: DisplayManager created, drawing splash screen...");
 
-        draw_splash_with_error(ctx, Some("正在初始化"), Some("..."))?;
+        match draw_splash_with_error(ctx, Some("正在初始化"), Some("...")) {
+            Ok(_) => {},
+            Err(e) => {
+                std::thread::sleep(Duration::from_secs(2));
+                return Err(e);
+            }
+        }
 
         Ok(())
     })

@@ -1,0 +1,15 @@
+﻿/target
+/Cargo.lock
+**/*.rs.bk
+*.pdb
+.DS_Store
+*.swp
+*.swo
+*~
+.vscode/
+.idea/
+/.history
+
+test_images
+compare_output
+test_output

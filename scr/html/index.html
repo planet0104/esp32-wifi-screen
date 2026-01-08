@@ -151,6 +151,21 @@
     <form id="wifi-form" autocomplete="off">
         <fieldset>
             <legend class="doc">网络设置</legend>
+            <div class="row responsive-label">
+                <div class="col-sm-12 col-md-3"><label class="doc">扫描WiFi:</label></div>
+                <div class="col-sm-12 col-md">
+                    <button class="tertiary" onclick="scanWifi()" type="button" style="margin-right: 10px;">扫描附近WiFi</button>
+                    <span id="scan-status" style="color: #666; font-size: 0.9em;"></span>
+                </div>
+            </div>
+            <div class="row responsive-label" id="wifi-list-row" style="display: none;">
+                <div class="col-sm-12 col-md-3"><label for="wifi-list-select" class="doc">选择WiFi:</label></div>
+                <div class="col-sm-12 col-md">
+                    <select id="wifi-list-select" style="width:85%;" class="doc" onchange="onWifiSelected()">
+                        <option value="">-- 请选择WiFi --</option>
+                    </select>
+                </div>
+            </div>
             <div class="row responsive-label"><div class="col-sm-12 col-md-3"><label for="ssid1-text" class="doc">Wi-Fi 名称 (SSID):</label></div>
             <div class="col-sm-12 col-md"><input autocomplete="off" required="required" maxlength="32" type="text" placeholder="ssid" id="ssid1-text" style="width:85%;" class="doc"></div></div>
             <div class="row responsive-label"><div class="col-sm-12 col-md-3"><label for="ssid1-pwd" class="doc">Wi-Fi 密码</label></div>
@@ -294,6 +309,68 @@
         function showDialog(msg){
             dialogText.innerHTML = msg;
             dialog.checked = true;
+        }
+
+        // WiFi扫描相关函数
+        async function scanWifi() {
+            const scanBtn = event.target;
+            const scanStatus = $('scan-status');
+            const wifiListRow = $('wifi-list-row');
+            const wifiListSelect = $('wifi-list-select');
+            
+            scanBtn.disabled = true;
+            scanStatus.textContent = '正在扫描...';
+            scanStatus.style.color = '#0277bd';
+            
+            try {
+                const response = await fetchWithTimeout('/scan_wifi', {
+                    method: 'GET'
+                }, 15000); // 15秒超时
+                
+                const wifiList = JSON.parse(await response.text());
+                
+                if (wifiList && wifiList.length > 0) {
+                    // 清空现有选项
+                    wifiListSelect.innerHTML = '<option value="">-- 请选择WiFi --</option>';
+                    
+                    // 添加扫描到的WiFi
+                    wifiList.forEach(wifi => {
+                        const option = document.createElement('option');
+                        option.value = wifi.ssid;
+                        option.dataset.authMode = wifi.auth_mode;
+                        // 显示WiFi名称和信号强度
+                        option.textContent = `${wifi.ssid} (${wifi.signal_strength}%)`;
+                        wifiListSelect.appendChild(option);
+                    });
+                    
+                    wifiListRow.style.display = '';
+                    scanStatus.textContent = `找到 ${wifiList.length} 个WiFi网络`;
+                    scanStatus.style.color = '#308732';
+                } else {
+                    scanStatus.textContent = '未找到WiFi网络';
+                    scanStatus.style.color = '#d32f2f';
+                }
+            } catch (e) {
+                console.error('WiFi扫描失败:', e);
+                scanStatus.textContent = '扫描失败: ' + e.message;
+                scanStatus.style.color = '#d32f2f';
+            } finally {
+                scanBtn.disabled = false;
+            }
+        }
+
+        function onWifiSelected() {
+            const wifiListSelect = $('wifi-list-select');
+            const ssidInput = $('ssid1-text');
+            const selectedOption = wifiListSelect.options[wifiListSelect.selectedIndex];
+            
+            if (selectedOption.value) {
+                ssidInput.value = selectedOption.value;
+                // 如果是开放网络，清空密码
+                if (selectedOption.dataset.authMode === 'None') {
+                    $('ssid1-pwd').value = '';
+                }
+            }
         }
 
         async function queryDisplayConfig() {
@@ -449,6 +526,33 @@
                 //     cfg.gateway_ip = gatewayip.value;
                 // }
                 
+                // 先验证WiFi连接
+                console.log('开始验证WiFi连接...');
+                const verifyResponse = await fetchWithTimeout('/verify_wifi', {
+                    method: 'POST',
+                    body: JSON.stringify({
+                        ssid: ssid1.value,
+                        password: pwd1.value
+                    })
+                }, 20000); // 20秒超时，因为WiFi连接需要时间
+                
+                const verifyResult = JSON.parse(await verifyResponse.text());
+                console.log('WiFi验证结果:', verifyResult);
+                
+                // 如果验证失败，询问用户是否继续保存
+                if (!verifyResult.success) {
+                    hideLoading();
+                    const confirmMessage = `WiFi连接验证失败：${verifyResult.message}\n\n是否仍然保存此配置？`;
+                    const shouldContinue = window.confirm(confirmMessage);
+                    
+                    if (!shouldContinue) {
+                        // 用户选择不保存
+                        return;
+                    }
+                    showLoading();
+                }
+                
+                // 保存配置
                 const response = await fetchWithTimeout('/wifi_config', {
                     method: 'POST',
                     body: JSON.stringify(cfg)

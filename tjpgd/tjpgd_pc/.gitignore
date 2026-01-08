@@ -1,0 +1,19 @@
+# Build outputs
+*.exe
+*.o
+*.obj
+
+# Output files
+*.ppm
+*.bmp
+
+# Test files (optional, comment out if you want to track them)
+test.jpg
+test_output.ppm
+
+# VS Code
+.vscode/
+
+# Backup files
+*~
+*.bak

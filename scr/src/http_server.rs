@@ -7,12 +7,14 @@ use canvas::{
 use embedded_svc::{
     http::{Headers, Method},
     io::{Read, Write},
+    wifi::Configuration,
 };
 
 use esp_idf_hal::sys::{esp_get_minimum_free_heap_size, esp_restart};
 use esp_idf_svc::{
     http::server::{EspHttpConnection, EspHttpServer},
     sys::{esp_get_free_heap_size, esp_get_free_internal_heap_size, EspError},
+    wifi::ClientConfiguration,
     ws::FrameType,
 };
 
@@ -20,7 +22,7 @@ use image::{codecs::png::PngEncoder, ImageEncoder};
 use log::*;
 use url::Url;
 
-use crate::{canvas, config, display::{self, check_screen_size}, tjpgd, with_context, with_context1, Context, ImageCache, MAX_HTTP_PAYLOAD_LEN, STACK_SIZE};
+use crate::{canvas, config, display::{self, check_screen_size}, with_context, with_context1, Context, ImageCache, MAX_HTTP_PAYLOAD_LEN, STACK_SIZE};
 
 pub fn start_http_server() -> Result<()>{
     let mut server = create_server()?;
@@ -171,6 +173,191 @@ pub fn start_http_server() -> Result<()>{
                 )?
                 .write_all(format!("{err:?}").as_bytes())
                 .map(|_| ()),
+        }
+    })?;
+
+    // HTTP GET 扫描WiFi网络
+    server.fn_handler("/scan_wifi", Method::Get, |req| {
+        let result = with_context(move |ctx| {
+            ctx.enter_config = true;
+            
+            info!("开始扫描WiFi网络...");
+            
+            // 使用WiFi driver进行扫描
+            let scan_result = ctx.wifi.wifi_mut().driver_mut().scan();
+            
+            match scan_result {
+                Ok(aps) => {
+                    info!("扫描到 {} 个WiFi网络", aps.len());
+                    
+                    // 构建WiFi列表JSON
+                    let mut wifi_list = Vec::new();
+                    
+                    for ap in aps.iter() {
+                        // 将SSID字符串转换
+                        let ssid = ap.ssid.as_str().to_string();
+                        
+                        // 跳过空SSID
+                        if ssid.is_empty() {
+                            continue;
+                        }
+                        
+                        // 计算信号强度百分比 (RSSI通常在-100到0之间)
+                        let signal_strength = ((ap.signal_strength as i32 + 100).max(0).min(100)) as u8;
+                        
+                        // 获取认证模式
+                        let auth_mode = match ap.auth_method {
+                            Some(embedded_svc::wifi::AuthMethod::None) => "None",
+                            Some(embedded_svc::wifi::AuthMethod::WEP) => "WEP",
+                            Some(embedded_svc::wifi::AuthMethod::WPA) => "WPA",
+                            Some(embedded_svc::wifi::AuthMethod::WPA2Personal) => "WPA2",
+                            Some(embedded_svc::wifi::AuthMethod::WPAWPA2Personal) => "WPA/WPA2",
+                            Some(embedded_svc::wifi::AuthMethod::WPA2Enterprise) => "WPA2-Enterprise",
+                            Some(embedded_svc::wifi::AuthMethod::WPA3Personal) => "WPA3",
+                            Some(embedded_svc::wifi::AuthMethod::WPA2WPA3Personal) => "WPA2/WPA3",
+                            Some(embedded_svc::wifi::AuthMethod::WAPIPersonal) => "WAPI",
+                            None => "Unknown",
+                        };
+                        
+                        wifi_list.push(serde_json::json!({
+                            "ssid": ssid,
+                            "signal_strength": signal_strength,
+                            "auth_mode": auth_mode,
+                            "channel": ap.channel
+                        }));
+                    }
+                    
+                    // 按信号强度排序（从强到弱）
+                    wifi_list.sort_by(|a, b| {
+                        let strength_a = a["signal_strength"].as_u64().unwrap_or(0);
+                        let strength_b = b["signal_strength"].as_u64().unwrap_or(0);
+                        strength_b.cmp(&strength_a)
+                    });
+                    
+                    Ok(serde_json::to_string(&wifi_list)?)
+                },
+                Err(e) => {
+                    error!("WiFi扫描失败: {:?}", e);
+                    Err(anyhow!("WiFi扫描失败: {:?}", e))
+                }
+            }
+        });
+        
+        match result {
+            Ok(json) => req
+                .into_response(
+                    200,
+                    Some("OK"),
+                    &[("Content-Type", "application/json; charset=utf-8")],
+                )?
+                .write_all(json.as_bytes())
+                .map(|_| ()),
+            Err(err) => req
+                .into_response(
+                    500,
+                    Some("Error"),
+                    &[("Content-Type", "text/plain; charset=utf-8")],
+                )?
+                .write_all(format!("{err:?}").as_bytes())
+                .map(|_| ())
+        }
+    })?;
+
+    // HTTP POST 验证WiFi连接
+    server.fn_handler("/verify_wifi", Method::Post, |mut req| {
+        // 先读取请求体
+        let mut buf = [0u8; 512];
+        let size = embedded_svc::io::Read::read(&mut req, &mut buf)?;
+        let body = str::from_utf8(&buf[..size]).map_err(|_| 
+            esp_idf_svc::io::EspIOError(EspError::from_non_zero(
+                NonZero::new(esp_idf_hal::sys::ESP_FAIL).unwrap()
+            ))
+        )?;
+        
+        let result = with_context(move |ctx| {
+            ctx.enter_config = true;
+            
+            info!("验证WiFi连接请求: {}", body);
+            
+            // 解析WiFi配置
+            let wifi_config: config::WifiConfig = serde_json::from_str(body)?;
+            
+            // 临时配置WiFi进行连接测试
+            let wifi_configuration = Configuration::Client(ClientConfiguration {
+                ssid: wifi_config.ssid.as_str().try_into().map_err(|_| anyhow!("SSID转换失败"))?,
+                password: wifi_config.password.as_str().try_into().map_err(|_| anyhow!("密码转换失败"))?,
+                ..Default::default()
+            });
+            
+            info!("开始测试WiFi连接: {}", wifi_config.ssid);
+            
+            // 设置WiFi配置
+            ctx.wifi.wifi_mut().set_configuration(&wifi_configuration)?;
+            
+            // 尝试连接（设置较短的超时时间）
+            let connect_result = ctx.wifi.wifi_mut().connect();
+            
+            match connect_result {
+                Ok(_) => {
+                    // 检查是否真的获取到了IP
+                    let ip_result = ctx.wifi.wifi().sta_netif().get_ip_info();
+                    
+                    // 断开测试连接，恢复AP模式
+                    let _ = ctx.wifi.wifi_mut().disconnect();
+                    
+                    match ip_result {
+                        Ok(ip_info) => {
+                            info!("WiFi连接测试成功，IP: {}", ip_info.ip);
+                            Ok(serde_json::json!({
+                                "success": true,
+                                "message": format!("连接成功，IP: {}", ip_info.ip)
+                            }).to_string())
+                        }
+                        Err(e) => {
+                            info!("WiFi连接测试失败：无法获取IP - {:?}", e);
+                            Ok(serde_json::json!({
+                                "success": false,
+                                "message": "无法获取IP地址"
+                            }).to_string())
+                        }
+                    }
+                }
+                Err(e) => {
+                    info!("WiFi连接测试失败: {:?}", e);
+                    Ok(serde_json::json!({
+                        "success": false,
+                        "message": format!("连接失败: {:?}", e)
+                    }).to_string())
+                }
+            }
+        });
+        
+        match result {
+            Ok(json) => req
+                .into_response(
+                    200,
+                    Some("OK"),
+                    &[("Content-Type", "application/json; charset=utf-8")],
+                )?
+                .write_all(json.as_bytes())
+                .map(|_| ()),
+            Err(err) => {
+                error!("WiFi验证失败: {:?}", err);
+                req.into_response(
+                    200,
+                    Some("OK"),
+                    &[("Content-Type", "application/json; charset=utf-8")],
+                )?
+                .write_all(
+                    serde_json::json!({
+                        "success": false,
+                        "message": format!("{:?}", err)
+                    })
+                    .to_string()
+                    .as_bytes(),
+                )
+                .map(|_| ())
+            }
         }
     })?;
 
@@ -623,9 +810,9 @@ pub fn start_http_server() -> Result<()>{
                         Some(display_manager) => {
                             // info!("mime:{mime:?}");
                             if mime.extension.ends_with("jpg") || mime.extension.ends_with("jpeg") {
-                                if let Ok((_, w, h, data)) = tjpgd::decode_jpg(Box::new(Vec::from(data))){
-                                    let _ = display::draw_rgb565_fast(display_manager, 0, 0, w, h, &data);
-                                }else{
+                                if let Ok(rgb565_data) = canvas::decode_jpeg_to_rgb565(&data) {
+                                    let _ = display::draw_rgb565_fast(display_manager, 0, 0, rgb565_data.0, rgb565_data.1, &rgb565_data.2);
+                                } else {
                                     error!("jpg decode error!");
                                 }
                             } else if mime.extension.ends_with("gif") || mime.extension.ends_with("png") {
@@ -812,7 +999,7 @@ fn handle_display_image(
         Some(v) => v,
     };
     if mime.extension.ends_with("jpg") || mime.extension.ends_with("jpeg") {
-        let (_, w, h, data) = tjpgd::decode_jpg(data)?;
+        let (w, h, data) = canvas::decode_jpeg_to_rgb565(&data)?;
         let decode_ms = t1.elapsed().as_millis();
         let t1 = Instant::now();
         display::draw_rgb565_fast(display_manager, 0, 0, w, h, &data)?;
