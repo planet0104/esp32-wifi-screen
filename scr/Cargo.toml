@@ -33,7 +33,7 @@ serde = { version = "1", default-features = false, features = ["derive"]}
 non-empty-string = { version = "0.2.5", features = ["serde"] }
 
 static_cell = "2.1.0"
-mipidsi = { git = "https://github.com/planet0104/mipidsi" }
+mipidsi = { path = "./mipidsi" }
 lz4_flex = "0.11.3"
 ab_glyph = { version="0.2.29", default-features = false, features = ["libm"] }
 embedded-graphics = "0.8.1"
@@ -45,6 +45,7 @@ image = { version = "0.25.5", default-features = false, features = ["gif", "png"
 url = "2.5.4"
 csscolorparser = "0.7.0"
 data-encoding = "2.8.0"
+tjpgdec-rs = { version = "0.4.0", default-features = false, features = ["fast-decode-2"] }
 
 [build-dependencies]
 embuild = "0.33"

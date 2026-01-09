@@ -57,6 +57,15 @@ pub struct DisplayConfig {
     pub inclusive_end_coords: bool,
     pub rotated_width: Option<NonZero<u16>>,
     pub rotated_height: Option<NonZero<u16>>,
+    /// 色调调整：红色通道偏移 (-100 到 +100)
+    #[serde(default)]
+    pub color_adjust_r: i8,
+    /// 色调调整：绿色通道偏移 (-100 到 +100)
+    #[serde(default)]
+    pub color_adjust_g: i8,
+    /// 色调调整：蓝色通道偏移 (-100 到 +100)
+    #[serde(default)]
+    pub color_adjust_b: i8,
 }
 
 impl DisplayConfig{

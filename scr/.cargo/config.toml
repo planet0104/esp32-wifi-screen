@@ -6,9 +6,7 @@ target-dir = "C:/esp/target"
 linker = "ldproxy"
 runner = "espflash flash --monitor"
 rustflags = [
-    "--cfg",  "espidf_time64",
-    "-L", "C:/Users/planet/Documents/GitHub/esp32-wifi-screen/scr/library",  # 指定库文件的路径
-    "-l", "tjpgd" # 链接 tjpgd 库
+    "--cfg",  "espidf_time64"
 ]
 
 [unstable]

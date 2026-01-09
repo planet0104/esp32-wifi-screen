@@ -17,6 +17,7 @@ use esp_idf_hal::{
 };
 use image::RgbImage;
 use log::info;
+use std::time::Duration;
 use mipidsi::interface::SpiInterface;
 use mipidsi::models::{Model, ST7796};
 use mipidsi::options::{ColorInversion, Orientation};
@@ -124,7 +125,9 @@ pub fn init() -> Result<()> {
     with_context(|ctx| {
         let display_config = match ctx.config.display_config.as_ref() {
             Some(c) => c,
-            None => return Err(anyhow!("display config is none!")),
+            None => {
+                return Err(anyhow!("display config is none!"));
+            }
         };
 
         check_screen_size(display_config)?;
@@ -188,6 +191,7 @@ pub fn init() -> Result<()> {
         info!("init display: y_offset:{}", display_config.y_offset);
         info!("init display: color_inversion:{}", display_config.color_inversion);
         info!("init display: with_cs:{}", display_config.with_cs);
+        info!("init display>02: Creating SPI interface...");
 
         let color_order = match display_config.color_order{
             crate::config::DisplayColorOrder::Rgb => mipidsi::options::ColorOrder::Rgb,
@@ -203,8 +207,10 @@ pub fn init() -> Result<()> {
             crate::config::DisplayRotation::Deg270 => mipidsi::options::Rotation::Deg270,
         };
 
+        info!("init display>03: Creating display interface...");
         let display_interface = match display_config.display_type {
             DisplayType::ST7735s => {
+                info!("init display>04: Creating ST7735s display...");
                 let di = create_di(true)?;
                 // st7735s 驱动
                 let display = Builder::new(ST7735s, di)
@@ -216,9 +222,11 @@ pub fn init() -> Result<()> {
                     .invert_colors(color_inversion)
                     .init(&mut delay)
                     .map_err(|err| anyhow!("{err:?}"))?;
+                info!("init display>05: ST7735s display created successfully");
                 DisplayInterface::ST7735s(display)
             }
             DisplayType::ST7796 => {
+                info!("init display>04: Creating ST7796 display...");
                 let di = create_di(true)?;
                 // st7796 驱动
                 let display = Builder::new(ST7796, di)
@@ -230,9 +238,11 @@ pub fn init() -> Result<()> {
                     .invert_colors(color_inversion)
                     .init(&mut delay)
                     .map_err(|err| anyhow!("{err:?}"))?;
+                info!("init display>05: ST7796 display created successfully");
                 DisplayInterface::ST7796(display)
             }
             DisplayType::ST7789 => {
+                info!("init display>04: Creating ST7789 display...");
                 let di = create_di(display_config.with_cs)?;
                 let display = Builder::new(ST7789, di)
                 .color_order(color_order)
@@ -243,13 +253,17 @@ pub fn init() -> Result<()> {
                 .invert_colors(color_inversion)
                 .init(&mut delay)
                 .map_err(|err| anyhow!("{err:?}"))?;
+                info!("init display>05: ST7789 display created successfully");
                 DisplayInterface::ST7789(display)
             }
         };
 
+        info!("init display>06: Loading font...");
         let font = FontRef::try_from_slice(include_bytes!("../VonwaonBitmap-12pxLite.otf"))
             .map_err(|err| anyhow!("{err:?}"))?;
+        info!("init display>07: Font loaded successfully");
 
+        info!("init display>08: Creating DisplayManager...");
         let display_manager = DisplayManager {
             display_config: display_config.clone(),
             display: display_interface,
@@ -257,8 +271,15 @@ pub fn init() -> Result<()> {
         };
 
         ctx.display.replace(display_manager);
+        info!("init display>09: DisplayManager created, drawing splash screen...");
 
-        draw_splash_with_error(ctx, Some("正在初始化"), Some("..."))?;
+        match draw_splash_with_error(ctx, Some("正在初始化"), Some("...")) {
+            Ok(_) => {},
+            Err(e) => {
+                std::thread::sleep(Duration::from_secs(2));
+                return Err(e);
+            }
+        }
 
         Ok(())
     })
@@ -270,14 +291,32 @@ pub fn draw_rgb_image_fast(
     y: u16,
     image: &RgbImage,
 ) -> Result<()> {
+    let adj_r = display_manager.display_config.color_adjust_r;
+    let adj_g = display_manager.display_config.color_adjust_g;
+    let adj_b = display_manager.display_config.color_adjust_b;
+    
     let mut pixels = Box::new(Vec::with_capacity(
         image.width() as usize * image.height() as usize,
     ));
-    for pixel in image.pixels() {
-        pixels.push(rgb888_to_rgb565(
-            pixel[0], pixel[1], pixel[2],
-        ).to_be());
+    
+    // 应用色调调整
+    if adj_r == 0 && adj_g == 0 && adj_b == 0 {
+        // 无需调整，直接转换
+        for pixel in image.pixels() {
+            pixels.push(rgb888_to_rgb565(
+                pixel[0], pixel[1], pixel[2],
+            ).to_be());
+        }
+    } else {
+        // 应用色调调整后转换
+        for pixel in image.pixels() {
+            let r = apply_color_adjust(pixel[0], adj_r);
+            let g = apply_color_adjust(pixel[1], adj_g);
+            let b = apply_color_adjust(pixel[2], adj_b);
+            pixels.push(rgb888_to_rgb565(r, g, b).to_be());
+        }
     }
+    
     let (width, height) = (image.width() as u16, image.height() as u16);
 
     let (end_x, end_y) = if display_manager.display_config.inclusive_end_coords{
@@ -309,6 +348,42 @@ pub fn draw_rgb565_fast(
     height: u16,
     pixels: &[u16],
 ) -> Result<()> {
+    let adj_r = display_manager.display_config.color_adjust_r;
+    let adj_g = display_manager.display_config.color_adjust_g;
+    let adj_b = display_manager.display_config.color_adjust_b;
+    
+    // 如果没有色调调整，直接绘制
+    if adj_r == 0 && adj_g == 0 && adj_b == 0 {
+        let (end_x, end_y) = if display_manager.display_config.inclusive_end_coords{
+            (x + width - 1, y + height - 1)
+        }else{
+            (x + width, y + height)
+        };
+        match &mut display_manager.display {
+            DisplayInterface::ST7735s(display) => {
+                display.set_pixels_buffer_u16(x, y, end_x, end_y, pixels.as_ref())
+            }
+            DisplayInterface::ST7789(display) => {
+                display.set_pixels_buffer_u16(x, y, end_x, end_y, pixels.as_ref())
+            }
+            DisplayInterface::ST7796(display) => {
+                display.set_pixels_buffer_u16(x, y, end_x, end_y, pixels.as_ref())
+            }
+        }
+        .map_err(|err| anyhow!("draw error:{err:?}"))?;
+        return Ok(());
+    }
+    
+    // 应用色调调整
+    let mut adjusted_pixels = Vec::with_capacity(pixels.len());
+    for &pixel in pixels {
+        // 输入是大端序，转换为本地字节序
+        let pixel_native = u16::from_be(pixel);
+        let (r, g, b) = rgb565_to_rgb888_adjusted(pixel_native, adj_r, adj_g, adj_b);
+        // 调整后转回大端序
+        adjusted_pixels.push(rgb888_to_rgb565(r, g, b).to_be());
+    }
+    
     let (end_x, end_y) = if display_manager.display_config.inclusive_end_coords{
         (x + width - 1, y + height - 1)
     }else{
@@ -316,13 +391,13 @@ pub fn draw_rgb565_fast(
     };
     match &mut display_manager.display {
         DisplayInterface::ST7735s(display) => {
-            display.set_pixels_buffer_u16(x, y, end_x, end_y, pixels.as_ref())
+            display.set_pixels_buffer_u16(x, y, end_x, end_y, &adjusted_pixels)
         }
         DisplayInterface::ST7789(display) => {
-            display.set_pixels_buffer_u16(x, y, end_x, end_y, pixels.as_ref())
+            display.set_pixels_buffer_u16(x, y, end_x, end_y, &adjusted_pixels)
         }
         DisplayInterface::ST7796(display) => {
-            display.set_pixels_buffer_u16(x, y, end_x, end_y, pixels.as_ref())
+            display.set_pixels_buffer_u16(x, y, end_x, end_y, &adjusted_pixels)
         }
     }
     .map_err(|err| anyhow!("draw error:{err:?}"))?;
@@ -340,6 +415,42 @@ pub fn draw_rgb565_u8array_fast(
     if pixels.len() != width as usize * height as usize * 2{
         return Err(anyhow!("error: pixels.len() != width*height*2"));
     }
+    
+    let adj_r = display_manager.display_config.color_adjust_r;
+    let adj_g = display_manager.display_config.color_adjust_g;
+    let adj_b = display_manager.display_config.color_adjust_b;
+    
+    // 如果没有色调调整，直接绘制
+    if adj_r == 0 && adj_g == 0 && adj_b == 0 {
+        let (end_x, end_y) = if display_manager.display_config.inclusive_end_coords{
+            (x + width - 1, y + height - 1)
+        }else{
+            (x + width, y + height)
+        };
+        match &mut display_manager.display {
+            DisplayInterface::ST7735s(display) => {
+                display.set_pixels_buffer(x, y, end_x, end_y, pixels)
+            }
+            DisplayInterface::ST7789(display) => {
+                display.set_pixels_buffer(x, y, end_x, end_y, pixels)
+            }
+            DisplayInterface::ST7796(display) => {
+                display.set_pixels_buffer(x, y, end_x, end_y, pixels)
+            }
+        }
+        .map_err(|err| anyhow!("draw error:{err:?}"))?;
+        return Ok(());
+    }
+    
+    // 应用色调调整
+    let mut adjusted_pixels = Vec::with_capacity(pixels.len());
+    for chunk in pixels.chunks_exact(2) {
+        let pixel = u16::from_be_bytes([chunk[0], chunk[1]]);
+        let (r, g, b) = rgb565_to_rgb888_adjusted(pixel, adj_r, adj_g, adj_b);
+        let adjusted = rgb888_to_rgb565(r, g, b);
+        adjusted_pixels.extend_from_slice(&adjusted.to_be_bytes());
+    }
+    
     let (end_x, end_y) = if display_manager.display_config.inclusive_end_coords{
         (x + width - 1, y + height - 1)
     }else{
@@ -347,13 +458,13 @@ pub fn draw_rgb565_u8array_fast(
     };
     match &mut display_manager.display {
         DisplayInterface::ST7735s(display) => {
-            display.set_pixels_buffer(x, y, end_x, end_y, pixels)
+            display.set_pixels_buffer(x, y, end_x, end_y, &adjusted_pixels)
         }
         DisplayInterface::ST7789(display) => {
-            display.set_pixels_buffer(x, y, end_x, end_y, pixels)
+            display.set_pixels_buffer(x, y, end_x, end_y, &adjusted_pixels)
         }
         DisplayInterface::ST7796(display) => {
-            display.set_pixels_buffer(x, y, end_x, end_y, pixels)
+            display.set_pixels_buffer(x, y, end_x, end_y, &adjusted_pixels)
         }
     }
     .map_err(|err| anyhow!("draw error:{err:?}"))?;
@@ -413,4 +524,23 @@ pub fn rgb565_to_rgb888(pixel: u16) -> (u8, u8, u8) {
     let b8 = (b as u16 * 255 / 31) as u8;
 
     (r8, g8, b8)
+}
+
+/// 应用色调调整
+/// adjust: -100 到 +100 的调整值
+#[inline(always)]
+pub fn apply_color_adjust(color: u8, adjust: i8) -> u8 {
+    let adjusted = color as i16 + (adjust as i16 * 255 / 100);
+    adjusted.clamp(0, 255) as u8
+}
+
+/// RGB565转RGB888并应用色调调整
+#[inline(always)]
+pub fn rgb565_to_rgb888_adjusted(pixel: u16, adj_r: i8, adj_g: i8, adj_b: i8) -> (u8, u8, u8) {
+    let (r, g, b) = rgb565_to_rgb888(pixel);
+    (
+        apply_color_adjust(r, adj_r),
+        apply_color_adjust(g, adj_g),
+        apply_color_adjust(b, adj_b),
+    )
 }

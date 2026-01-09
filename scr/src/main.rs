@@ -1,5 +1,5 @@
 use core::convert::TryInto;
-use std::{collections::HashMap, net::Ipv4Addr, num::NonZero, sync::Mutex, time::Duration};
+use std::{collections::HashMap, net::Ipv4Addr, num::NonZero, sync::Mutex, time::{Duration, Instant}};
 
 use anyhow::{anyhow, Result};
 use canvas::{
@@ -31,12 +31,11 @@ mod config;
 mod display;
 #[allow(unused)]
 mod imageproc;
-mod tjpgd;
-// mod tjpgd_rgb565;
 mod mqtt_client;
 mod http_server;
 
 // Need lots of stack to parse JSON
+// With CONFIG_SPIRAM_ALLOW_STACK_EXTERNAL_MEMORY, stacks can use PSRAM
 const STACK_SIZE: usize = 1024 * 10;
 
 pub const WIFI_AP_SSID: &str = "ESP32-WiFiScreen";
@@ -64,9 +63,10 @@ pub struct Context {
     //存放上传的图片
     #[serde(skip)]
     image_cache: HashMap<String, ImageCache>,
-    //是否进入了设置界面，进入设置洁面后，即使wifi断开也不重启
+    //记录最后一次访问配置页面的时间，用于防止配置期间自动重启
+    //如果超过10分钟没有访问配置，则认为用户已离开，允许自动重启
     #[serde(skip)]
-    enter_config: bool
+    last_config_time: Option<Instant>
 }
 
 static CONTEXT: Lazy<Mutex<Option<Box<Context>>>> = Lazy::new(|| Mutex::new(None));
@@ -99,9 +99,16 @@ fn main() -> anyhow::Result<()> {
 
     esp_idf_svc::log::EspLogger::initialize_default();
 
+    // 启动后等待5秒，确保串口能够连接
+    info!("=== ESP32 WiFi Screen Starting ===");
+
+    print_memory("start>01");
+
     let peripherals = Peripherals::take()?;
     let sys_loop = EspSystemEventLoop::take()?;
     let nvs_default_partition = EspDefaultNvsPartition::take()?;
+
+    print_memory("start>02");
 
     let mut config_nvs =
         match esp_idf_svc::nvs::EspNvs::new(nvs_default_partition.clone(), "config_ns", true) {
@@ -115,25 +122,39 @@ fn main() -> anyhow::Result<()> {
     let mut sta_ip_config = ipv4::ClientConfiguration::default();
 
     //读取配置参数
+    info!("Reading configuration from NVS...");
     let config = match config::read_config(&mut config_nvs) {
         Err(err) => {
             error!("config read fail:{err:?}");
+            info!("Using default configuration");
             Config::default()
         }
         Ok(c) => {
+            info!("Configuration loaded successfully");
             if let Some(wifi_c) = c.wifi_config.as_ref() {
+                info!("WiFi config found: SSID={}", wifi_c.ssid);
                 // if let (Some(ip), Some(gw)) = (wifi_c.device_ip.clone(), wifi_c.gateway_ip.clone())
                 if let Some(ip) = wifi_c.device_ip.clone()
                 {
+                    info!("Static IP configured: {}", ip);
                     sta_ip_config = ipv4::ClientConfiguration::Fixed(ipv4::ClientSettings {
                         ip,
                         ..Default::default()
                     });
                 }
             }
+            if let Some(display_c) = c.display_config.as_ref() {
+                info!("Display config found: type={:?}, size={}x{}", 
+                    display_c.display_type, display_c.width, display_c.height);
+            } else {
+                info!("No display configuration found");
+            }
             c
         }
     };
+    print_memory("config loaded");
+    
+    info!("Creating WiFi driver...");
     let wifi = EspWifi::wrap_all(
         WifiDriver::new(
             peripherals.modem,
@@ -164,9 +185,16 @@ fn main() -> anyhow::Result<()> {
         // EspNetif::new(NetifStack::Ap)?
     )?;
 
+    info!("WiFi driver created successfully");
+    print_memory("wifi driver created");
+    std::thread::sleep(Duration::from_millis(500));
+
     let wifi = BlockingWifi::wrap(wifi, sys_loop)?;
+    info!("WiFi wrapper created");
+    print_memory("wifi wrapper created");
 
     {
+        info!("Initializing context...");
         let display_pins = DisplayPins {
             spi2: peripherals.spi2,
             cs: peripherals.pins.gpio4,
@@ -185,36 +213,67 @@ fn main() -> anyhow::Result<()> {
             free_internal_heap: 0,
             wifi,
             image_cache: HashMap::new(),
-            enter_config: false,
+            last_config_time: None,
         }));
+        info!("Context initialized successfully");
     }
+    print_memory("context initialized");
+    std::thread::sleep(Duration::from_millis(500));
 
     //尝试初始化屏幕
+    info!("========================================");
+    info!("Starting display initialization...");
     print_memory("init display>01");
-    std::thread::sleep(Duration::from_secs(1));
-    if let Err(err) = display::init() {
-        error!("display init error:{err:?}");
+    std::thread::sleep(Duration::from_secs(2));
+    
+    match display::init() {
+        Ok(_) => {
+            info!("Display initialized successfully!");
+            print_memory("display init success");
+        }
+        Err(err) => {
+            error!("Display initialization failed: {err:?}");
+            print_memory(&format!("display init error: {err:?}"));
+            std::thread::sleep(Duration::from_secs(3)); // 延迟3秒确保串口接收到错误信息
+        }
     }
     print_memory("init display>02");
-    std::thread::sleep(Duration::from_secs(1));
+    std::thread::sleep(Duration::from_secs(2));
+    info!("Display initialization completed");
+    info!("========================================");
 
     //启动wifi热点
+    info!("Starting WiFi...");
     if let Err(err) = start_wifi() {
+        error!("WiFi start failed: {err:?}");
         let _ = draw_splash_with_error1(Some("WiFi连接失败!"), Some(&format!("{err:?}")));
+        std::thread::sleep(Duration::from_secs(2));
+    } else {
+        info!("WiFi started successfully");
     }
     print_memory("init start wifi");
     std::thread::sleep(Duration::from_secs(1));
+    
     //启动http服务器
+    info!("Starting HTTP server...");
     http_server::start_http_server()?;
+    info!("HTTP server started successfully");
+    print_memory("http server started");
 
     //启动mqtt客户端
+    info!("Starting MQTT client...");
     if let Err(err) = mqtt_client::listen_config(){
-        error!("listen config:{err:?}");
+        error!("MQTT listen config failed (attempt 1): {err:?}");
         std::thread::sleep(Duration::from_secs(3));
         if let Err(err) = mqtt_client::listen_config(){
-            error!("listen config:{err:?}");
+            error!("MQTT listen config failed (attempt 2): {err:?}");
+        } else {
+            info!("MQTT client started successfully (attempt 2)");
         }
+    } else {
+        info!("MQTT client started successfully");
     }
+    info!("=== Initialization Complete ===");
     Ok(())
 }
 
@@ -252,26 +311,8 @@ fn start_wifi() -> anyhow::Result<()> {
                 .set_configuration(&Configuration::AccessPoint(ap_config))?;
         }
 
-        unsafe{
-            
-            esp_wifi_set_ps(wifi_ps_type_t_WIFI_PS_NONE);
-            // esp_wifi_config_80211_tx_rate(wifi_interface_t_WIFI_IF_STA, wifi_phy_rate_t_WIFI_PHY_RATE_11M_S);
-            // let mut getprotocol = 0;
-            // let err = esp_wifi_get_protocol(wifi_interface_t_WIFI_IF_STA, &mut getprotocol);
-            // info!("getprotocol -> err = {err} getprotocol = {getprotocol}");
-            // if getprotocol as u32 & WIFI_PROTOCOL_11N > 0 {
-            //     info!("getprotocol -> WiFi_Protocol_11n");
-            // }
-            // if getprotocol as u32 & esp_idf_svc::sys::WIFI_PROTOCOL_11G > 0 {
-            //     info!("getprotocol -> WiFi_Protocol_11g");
-            // }
-            // if getprotocol as u32 & WIFI_PROTOCOL_11B > 0 {
-            //     info!("getprotocol -> WiFi_Protocol_11b");
-            // }
-            // if getprotocol as u32 & esp_idf_svc::sys::WIFI_PROTOCOL_11AX > 0 {
-            //     info!("getprotocol -> WIFI_PROTOCOL_11AX");
-            // }
-        }
+        // Disable WiFi power save for maximum throughput and minimum latency
+        unsafe { esp_wifi_set_ps(wifi_ps_type_t_WIFI_PS_NONE) };
 
         if let Err(err) = ctx.wifi.start(){
             error!("wifi start: {err:?}");
@@ -326,14 +367,24 @@ fn start_wifi() -> anyhow::Result<()> {
         let _ = draw_splash_with_error(ctx, Some("IP:192.168.72.1"), err2.as_ref().map(|x| x.as_str()));
 
         //每隔60秒钟检查wifi是否连接，如果断开连接，自动重启
+        //但如果用户正在配置（最后访问配置时间在10分钟内），则跳过重启
         std::thread::spawn(move ||{
             loop{
                 std::thread::sleep(Duration::from_secs(60));
                 let _ = with_context(|ctx| {
                     if ctx.config.wifi_config.is_some(){
                         let connected = ctx.wifi.is_connected().unwrap_or(false);
-                        print_memory(&format!("idle connected={connected}"));
-                        if !connected{
+                        
+                        // 检查用户是否在配置中（最后访问时间在10分钟内）
+                        let in_config = if let Some(last_time) = ctx.last_config_time {
+                            last_time.elapsed() < Duration::from_secs(10 * 60)  // 10分钟
+                        } else {
+                            false
+                        };
+                        
+                        print_memory(&format!("idle connected={connected} in_config={in_config}"));
+                        if !connected && !in_config {
+                            info!("WiFi断开且用户未在配置中，准备重启...");
                             std::thread::sleep(Duration::from_millis(500));
                             unsafe { esp_restart() };
                         }
