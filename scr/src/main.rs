@@ -383,14 +383,15 @@ fn start_wifi() -> anyhow::Result<()> {
         let _ = draw_splash_with_error(ctx, Some("IP:192.168.72.1"), err2.as_ref().map(|x| x.as_str()));
 
         //每隔60秒钟检查wifi是否连接，如果断开连接，自动重启
+        //但如果有用户正在配置（enter_config=true），则跳过重启
         std::thread::spawn(move ||{
             loop{
                 std::thread::sleep(Duration::from_secs(60));
                 let _ = with_context(|ctx| {
                     if ctx.config.wifi_config.is_some(){
                         let connected = ctx.wifi.is_connected().unwrap_or(false);
-                        print_memory(&format!("idle connected={connected}"));
-                        if !connected{
+                        print_memory(&format!("idle connected={connected} enter_config={}",ctx.enter_config));
+                        if !connected && !ctx.enter_config {
                             std::thread::sleep(Duration::from_millis(500));
                             unsafe { esp_restart() };
                         }

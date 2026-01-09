@@ -2,6 +2,31 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.4.0] - 2026-01-09
+
+### Added
+- **三种 JD_FASTDECODE 优化级别**：与 C 版本完全一致
+  - `fast-decode-0`: 基础优化，适合 8/16 位 MCU (3100 bytes)
+  - `fast-decode-1`: + 32 位桶移位器，推荐 ESP32 (3500 bytes)
+  - `fast-decode-2`: + Huffman 快速查找表，最快 (9644 bytes)
+- **`fastdecode_level()` 函数**：运行时查询当前优化级别
+- **多模式测试脚本**：`compare_outputs.ps1` 支持测试所有模式
+
+### Changed
+- **统一 API**：移除了 `JpegDecoderPool`，只保留 `JpegDecoder`（内存池版本）
+- **Feature 重构**：
+  - `fast-decode` 现在是 `fast-decode-2` 的别名（向后兼容）
+  - 默认使用 `fast-decode-1`（适合 32 位 MCU）
+- **项目结构简化**：删除了 `decoder_pool.rs` 和 `huffman_pool.rs`
+
+### Fixed
+- **LUT 快速解码 bug**：修复了 `decode_fast` 在 LUT 未命中时的逻辑错误
+- **Huffman 解码**：确保与 C 版本 `huffext()` 函数完全一致
+
+### Performance
+- Level 1/2 测试：13/13 测试图片全部通过
+- 与 C 版本一致性：舍入误差 ≤3（每像素）
+
 ## [0.3.1] - 2026-01-08
 
 ### Added

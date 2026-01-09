@@ -45,7 +45,7 @@ image = { version = "0.25.5", default-features = false, features = ["gif", "png"
 url = "2.5.4"
 csscolorparser = "0.7.0"
 data-encoding = "2.8.0"
-tjpgd = { path = "../tjpgd", features = ["fast-decode"] }
+tjpgd = { path = "../tjpgd", default-features = false, features = ["fast-decode-2"] }
 
 [build-dependencies]
 embuild = "0.33"

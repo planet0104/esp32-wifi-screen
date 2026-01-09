@@ -51,7 +51,7 @@ fn main() {
     
     // Test 5: Decompress with buffers
     print!("Test 5: Decompress with external buffers... ");
-    if test_decompress_with_buffers() {
+    if test_decompress() {
         println!("✓ PASSED");
         passed += 1;
     } else {
@@ -129,7 +129,7 @@ fn test_buffer_size_calculation() -> bool {
     mcu_size > 0 && work_size > 0 && mcu_size <= 10000 && work_size <= 100000
 }
 
-fn test_decompress_with_buffers() -> bool {
+fn test_decompress() -> bool {
     let jpeg_data = include_bytes!("../test_images/test1.jpg");
     let mut decoder = JpegDecoder::new();
     
@@ -146,7 +146,7 @@ fn test_decompress_with_buffers() -> bool {
     let mut work_buf = vec![0u8; work_size];
     
     let mut callback_count = 0;
-    let result = decoder.decompress_with_buffers(
+    let result = decoder.decompress(
         jpeg_data,
         0,
         &mut mcu_buf,
@@ -172,7 +172,7 @@ fn test_insufficient_buffer() -> bool {
     let mut mcu_buf = vec![0i16; 10];
     let mut work_buf = vec![0u8; 10];
     
-    let result = decoder.decompress_with_buffers(
+    let result = decoder.decompress(
         jpeg_data,
         0,
         &mut mcu_buf,
@@ -202,7 +202,7 @@ fn test_different_scale_factors() -> bool {
         let mut work_buf = vec![0u8; work_size];
         
         let mut dimensions_ok = true;
-        let result = decoder.decompress_with_buffers(
+        let result = decoder.decompress(
             jpeg_data,
             scale,
             &mut mcu_buf,

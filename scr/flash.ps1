@@ -34,7 +34,7 @@ $tool = ".\esptool.exe"
 
 $availablePorts = [System.IO.Ports.SerialPort]::getportnames()
 
-$portsToCheck = @("COM3", "COM10", "COM6")
+$portsToCheck = @("COM3", "COM10", "COM6", "COM5")
 $selectPort = $portsToCheck[0];
 
 foreach ($port in $portsToCheck) {

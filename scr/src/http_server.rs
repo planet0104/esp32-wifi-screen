@@ -7,14 +7,12 @@ use canvas::{
 use embedded_svc::{
     http::{Headers, Method},
     io::{Read, Write},
-    wifi::Configuration,
 };
 
 use esp_idf_hal::sys::{esp_get_minimum_free_heap_size, esp_restart};
 use esp_idf_svc::{
     http::server::{EspHttpConnection, EspHttpServer},
     sys::{esp_get_free_heap_size, esp_get_free_internal_heap_size, EspError},
-    wifi::ClientConfiguration,
     ws::FrameType,
 };
 
@@ -181,14 +179,14 @@ pub fn start_http_server() -> Result<()>{
         let result = with_context(move |ctx| {
             ctx.enter_config = true;
             
-            info!("开始扫描WiFi网络...");
+            info!("Scanning WiFi networks...");
             
             // 使用WiFi driver进行扫描
             let scan_result = ctx.wifi.wifi_mut().driver_mut().scan();
             
             match scan_result {
                 Ok(aps) => {
-                    info!("扫描到 {} 个WiFi网络", aps.len());
+                    info!("Found {} WiFi networks", aps.len());
                     
                     // 构建WiFi列表JSON
                     let mut wifi_list = Vec::new();
@@ -237,7 +235,7 @@ pub fn start_http_server() -> Result<()>{
                     Ok(serde_json::to_string(&wifi_list)?)
                 },
                 Err(e) => {
-                    error!("WiFi扫描失败: {:?}", e);
+                    error!("WiFi scan failed: {:?}", e);
                     Err(anyhow!("WiFi扫描失败: {:?}", e))
                 }
             }
@@ -260,104 +258,6 @@ pub fn start_http_server() -> Result<()>{
                 )?
                 .write_all(format!("{err:?}").as_bytes())
                 .map(|_| ())
-        }
-    })?;
-
-    // HTTP POST 验证WiFi连接
-    server.fn_handler("/verify_wifi", Method::Post, |mut req| {
-        // 先读取请求体
-        let mut buf = [0u8; 512];
-        let size = embedded_svc::io::Read::read(&mut req, &mut buf)?;
-        let body = str::from_utf8(&buf[..size]).map_err(|_| 
-            esp_idf_svc::io::EspIOError(EspError::from_non_zero(
-                NonZero::new(esp_idf_hal::sys::ESP_FAIL).unwrap()
-            ))
-        )?;
-        
-        let result = with_context(move |ctx| {
-            ctx.enter_config = true;
-            
-            info!("验证WiFi连接请求: {}", body);
-            
-            // 解析WiFi配置
-            let wifi_config: config::WifiConfig = serde_json::from_str(body)?;
-            
-            // 临时配置WiFi进行连接测试
-            let wifi_configuration = Configuration::Client(ClientConfiguration {
-                ssid: wifi_config.ssid.as_str().try_into().map_err(|_| anyhow!("SSID转换失败"))?,
-                password: wifi_config.password.as_str().try_into().map_err(|_| anyhow!("密码转换失败"))?,
-                ..Default::default()
-            });
-            
-            info!("开始测试WiFi连接: {}", wifi_config.ssid);
-            
-            // 设置WiFi配置
-            ctx.wifi.wifi_mut().set_configuration(&wifi_configuration)?;
-            
-            // 尝试连接（设置较短的超时时间）
-            let connect_result = ctx.wifi.wifi_mut().connect();
-            
-            match connect_result {
-                Ok(_) => {
-                    // 检查是否真的获取到了IP
-                    let ip_result = ctx.wifi.wifi().sta_netif().get_ip_info();
-                    
-                    // 断开测试连接，恢复AP模式
-                    let _ = ctx.wifi.wifi_mut().disconnect();
-                    
-                    match ip_result {
-                        Ok(ip_info) => {
-                            info!("WiFi连接测试成功，IP: {}", ip_info.ip);
-                            Ok(serde_json::json!({
-                                "success": true,
-                                "message": format!("连接成功，IP: {}", ip_info.ip)
-                            }).to_string())
-                        }
-                        Err(e) => {
-                            info!("WiFi连接测试失败：无法获取IP - {:?}", e);
-                            Ok(serde_json::json!({
-                                "success": false,
-                                "message": "无法获取IP地址"
-                            }).to_string())
-                        }
-                    }
-                }
-                Err(e) => {
-                    info!("WiFi连接测试失败: {:?}", e);
-                    Ok(serde_json::json!({
-                        "success": false,
-                        "message": format!("连接失败: {:?}", e)
-                    }).to_string())
-                }
-            }
-        });
-        
-        match result {
-            Ok(json) => req
-                .into_response(
-                    200,
-                    Some("OK"),
-                    &[("Content-Type", "application/json; charset=utf-8")],
-                )?
-                .write_all(json.as_bytes())
-                .map(|_| ()),
-            Err(err) => {
-                error!("WiFi验证失败: {:?}", err);
-                req.into_response(
-                    200,
-                    Some("OK"),
-                    &[("Content-Type", "application/json; charset=utf-8")],
-                )?
-                .write_all(
-                    serde_json::json!({
-                        "success": false,
-                        "message": format!("{:?}", err)
-                    })
-                    .to_string()
-                    .as_bytes(),
-                )
-                .map(|_| ())
-            }
         }
     })?;
 

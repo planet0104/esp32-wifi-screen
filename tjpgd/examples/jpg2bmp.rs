@@ -7,7 +7,7 @@ use std::fs::File;
 use std::io::{Read, Write};
 use std::path::Path;
 
-use tjpgd::{JpegDecoder, Rectangle};
+use tjpgd::{JpegDecoder, Rectangle, MemoryPool, RECOMMENDED_POOL_SIZE, fastdecode_level};
 
 /// BMP文件头 (14 bytes)
 #[repr(C, packed)]
@@ -119,7 +119,8 @@ fn generate_output_filename(input_file: &str) -> String {
 
 fn main() {
     println!("JPEG to BMP Converter using tjpgd (Rust)");
-    println!("=========================================\n");
+    println!("=========================================");
+    println!("JD_FASTDECODE level: {}\n", fastdecode_level());
     
     let args: Vec<String> = env::args().collect();
     
@@ -164,10 +165,14 @@ fn main() {
     println!("Output file: {}", output_file);
     println!("File size: {} bytes", jpeg_data.len());
     
+    // 创建内存池（与 C 版本一致）
+    let mut pool_buffer = vec![0u8; RECOMMENDED_POOL_SIZE];
+    let mut pool = MemoryPool::new(&mut pool_buffer);
+    
     // 创建解码器并准备
     let mut decoder = JpegDecoder::new();
     
-    if let Err(e) = decoder.prepare(&jpeg_data) {
+    if let Err(e) = decoder.prepare(&jpeg_data, &mut pool) {
         println!("Error: prepare() failed: {:?}", e);
         std::process::exit(1);
     }
@@ -213,8 +218,8 @@ fn main() {
     
     println!("Decompressing with external buffers (memory-efficient mode)...");
     
-    if let Err(e) = decoder.decompress_with_buffers(&jpeg_data, 0, &mut mcu_buffer, &mut work_buffer, &mut callback) {
-        println!("Error: decompress_with_buffers() failed: {:?}", e);
+    if let Err(e) = decoder.decompress(&jpeg_data, 0, &mut mcu_buffer, &mut work_buffer, &mut callback) {
+        println!("Error: decompress() failed: {:?}", e);
         std::process::exit(1);
     }
     

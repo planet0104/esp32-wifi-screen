@@ -522,35 +522,6 @@
                 if(deviceip.value.trim().length>0){
                     cfg.device_ip = deviceip.value;
                 }
-                // if(gatewayip.value.trim().length>0){
-                //     cfg.gateway_ip = gatewayip.value;
-                // }
-                
-                // 先验证WiFi连接
-                console.log('开始验证WiFi连接...');
-                const verifyResponse = await fetchWithTimeout('/verify_wifi', {
-                    method: 'POST',
-                    body: JSON.stringify({
-                        ssid: ssid1.value,
-                        password: pwd1.value
-                    })
-                }, 20000); // 20秒超时，因为WiFi连接需要时间
-                
-                const verifyResult = JSON.parse(await verifyResponse.text());
-                console.log('WiFi验证结果:', verifyResult);
-                
-                // 如果验证失败，询问用户是否继续保存
-                if (!verifyResult.success) {
-                    hideLoading();
-                    const confirmMessage = `WiFi连接验证失败：${verifyResult.message}\n\n是否仍然保存此配置？`;
-                    const shouldContinue = window.confirm(confirmMessage);
-                    
-                    if (!shouldContinue) {
-                        // 用户选择不保存
-                        return;
-                    }
-                    showLoading();
-                }
                 
                 // 保存配置
                 const response = await fetchWithTimeout('/wifi_config', {

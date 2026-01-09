@@ -1,4 +1,0 @@
-帮我修复rust问题，将rust的 prepare()、debug逻辑，严格对齐c语言版本(tjpgd_pc)，并通过 examples测试。
-
-
-再次帮我逐行对比c代码，检查rust的 prepare() 、decompress_with_buffers方法，对于内存的申请、初始化、内存占用、回调数据等，是否严格跟c语言一致！

@@ -28,7 +28,7 @@ fn main() -> Result<()> {
     let mut output_buffer = Vec::new();
 
     // Decompress with external buffers
-    decoder.decompress_with_buffers(
+    decoder.decompress(
         jpeg_data, 
         0,  // scale = 0 (no scaling)
         &mut mcu_buffer,
