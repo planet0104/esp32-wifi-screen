@@ -114,7 +114,7 @@
             <div class="row responsive-label">
                 <div class="col-sm-12 col-md-3"><label for="disp-rotation" class="doc">方向</label></div>
                 <div class="col-sm-12 col-md">
-                    <select id="disp-rotation" style="width:85%;" class="doc">
+                    <select id="disp-rotation" style="width:85%;" class="doc" onchange="applyRotationRealtime()">
                         <option class="doc">0度</option>
                         <option class="doc">90度</option>
                         <option class="doc">180度</option>
@@ -148,9 +148,75 @@
             &nbsp;<button class="tertiary" onclick="showTestDialog()" type="button">屏幕测试</button>
         </div>
     </form>
+    
+    <form id="color-adjust-form" autocomplete="off">
+        <fieldset>
+            <legend class="doc no-select">色调调整 (拖动滑块实时生效)</legend>
+            <div class="row responsive-label">
+                <div class="col-sm-12 col-md-3"><label class="doc">快捷预设:</label></div>
+                <div class="col-sm-12 col-md">
+                    <button class="tertiary" onclick="applyColorPreset('fix-blue')" type="button" style="font-size:0.85em;padding:4px 8px;margin:2px;">修复偏蓝</button>
+                    <button class="tertiary" onclick="applyColorPreset('fix-yellow')" type="button" style="font-size:0.85em;padding:4px 8px;margin:2px;">修复偏黄</button>
+                    <button class="tertiary" onclick="applyColorPreset('warm')" type="button" style="font-size:0.85em;padding:4px 8px;margin:2px;">暖色调</button>
+                    <button class="tertiary" onclick="applyColorPreset('cool')" type="button" style="font-size:0.85em;padding:4px 8px;margin:2px;">冷色调</button>
+                </div>
+            </div>
+            <div class="row responsive-label">
+                <div class="col-sm-12 col-md-3">
+                    <label for="color-adjust-r" class="doc">红色 (R)</label>
+                </div>
+                <div class="col-sm-12 col-md">
+                    <input type="range" id="color-adjust-r" min="-100" max="100" value="0" step="1" style="width:70%;" class="doc">
+                    <span id="color-adjust-r-value" style="display:inline-block; width:50px; text-align:right; font-weight:bold; color:#f44336;">0</span>
+                </div>
+            </div>
+            <div class="row responsive-label">
+                <div class="col-sm-12 col-md-3">
+                    <label for="color-adjust-g" class="doc">绿色 (G)</label>
+                </div>
+                <div class="col-sm-12 col-md">
+                    <input type="range" id="color-adjust-g" min="-100" max="100" value="0" step="1" style="width:70%;" class="doc">
+                    <span id="color-adjust-g-value" style="display:inline-block; width:50px; text-align:right; font-weight:bold; color:#4caf50;">0</span>
+                </div>
+            </div>
+            <div class="row responsive-label">
+                <div class="col-sm-12 col-md-3">
+                    <label for="color-adjust-b" class="doc">蓝色 (B)</label>
+                </div>
+                <div class="col-sm-12 col-md">
+                    <input type="range" id="color-adjust-b" min="-100" max="100" value="0" step="1" style="width:70%;" class="doc">
+                    <span id="color-adjust-b-value" style="display:inline-block; width:50px; text-align:right; font-weight:bold; color:#2196f3;">0</span>
+                </div>
+            </div>
+            <div class="row responsive-label">
+                <div class="col-sm-12 col-md-3"></div>
+                <div class="col-sm-12 col-md">
+                    <small style="color:#666;">💡 调整范围: -100 到 +100。拖动滑块时会自动应用，屏幕会实时刷新显示效果</small>
+                </div>
+            </div>
+        </fieldset>
+        <div style="text-align: center; padding: 10px;">
+            <button class="tertiary" onclick="resetColorAdjust()" type="button">重置为0</button>
+        </div>
+    </form>
     <form id="wifi-form" autocomplete="off">
         <fieldset>
             <legend class="doc">网络设置</legend>
+            <div class="row responsive-label">
+                <div class="col-sm-12 col-md-3"><label class="doc">扫描WiFi:</label></div>
+                <div class="col-sm-12 col-md">
+                    <button class="tertiary" onclick="scanWifi()" type="button" style="margin-right: 10px;">扫描附近WiFi</button>
+                    <span id="scan-status" style="color: #666; font-size: 0.9em;"></span>
+                </div>
+            </div>
+            <div class="row responsive-label" id="wifi-list-row" style="display: none;">
+                <div class="col-sm-12 col-md-3"><label for="wifi-list-select" class="doc">选择WiFi:</label></div>
+                <div class="col-sm-12 col-md">
+                    <select id="wifi-list-select" style="width:85%;" class="doc" onchange="onWifiSelected()">
+                        <option value="">-- 请选择WiFi --</option>
+                    </select>
+                </div>
+            </div>
             <div class="row responsive-label"><div class="col-sm-12 col-md-3"><label for="ssid1-text" class="doc">Wi-Fi 名称 (SSID):</label></div>
             <div class="col-sm-12 col-md"><input autocomplete="off" required="required" maxlength="32" type="text" placeholder="ssid" id="ssid1-text" style="width:85%;" class="doc"></div></div>
             <div class="row responsive-label"><div class="col-sm-12 col-md-3"><label for="ssid1-pwd" class="doc">Wi-Fi 密码</label></div>
@@ -163,6 +229,7 @@
         </fieldset>
         <div class="button-group">
             <button class="primary" type="submit">保存网络设置</button>
+            &nbsp;<button class="tertiary" onclick="reconnectWifi()" type="button">实时重连WiFi</button>
         </div>
     </form>
 
@@ -193,7 +260,47 @@
         <div class="button-group">
             <button class="primary" type="submit">保存MQTT设置</button>
             <button class="tertiary" onclick="deleteMqttConfig()" type="button">删除MQTT设置</button>
+            <button class="tertiary" onclick="reconnectMqtt()" type="button">实时重连MQTT</button>
         </div>
+    </form>
+
+    <form id="speedtest-form" autocomplete="off">
+        <fieldset>
+            <legend class="doc">传输速度测试</legend>
+            <div class="row responsive-label">
+                <div class="col-sm-12 col-md-3"><label class="doc">测试数据大小:</label></div>
+                <div class="col-sm-12 col-md">
+                    <select id="test-data-size" style="width:85%;" class="doc">
+                        <option value="10240">10 KB</option>
+                        <option value="51200">50 KB</option>
+                        <option value="102400" selected>100 KB</option>
+                        <option value="204800">200 KB</option>
+                        <option value="524288">512 KB</option>
+                        <option value="1048576">1 MB</option>
+                    </select>
+                </div>
+            </div>
+            <div class="row responsive-label">
+                <div class="col-sm-12 col-md-3"><label class="doc">HTTP速度:</label></div>
+                <div class="col-sm-12 col-md">
+                    <span id="http-speed-result" style="font-weight: bold; color: #1976d2;">--</span>
+                    <button class="tertiary" onclick="runHttpSpeedTest()" type="button" style="margin-left: 10px;">测试HTTP</button>
+                </div>
+            </div>
+            <div class="row responsive-label">
+                <div class="col-sm-12 col-md-3"><label class="doc">WebSocket速度:</label></div>
+                <div class="col-sm-12 col-md">
+                    <span id="ws-speed-result" style="font-weight: bold; color: #308732;">--</span>
+                    <button class="tertiary" onclick="runWsSpeedTest()" type="button" style="margin-left: 10px;">测试WebSocket</button>
+                </div>
+            </div>
+            <div class="row responsive-label">
+                <div class="col-sm-12 col-md-3"><label class="doc">测试日志:</label></div>
+                <div class="col-sm-12 col-md">
+                    <textarea id="speedtest-log" readonly style="width:85%; height:80px; font-size:12px; font-family:monospace;"></textarea>
+                </div>
+            </div>
+        </fieldset>
     </form>
 
     <input type="checkbox" id="loading-control" class="modal">
@@ -225,6 +332,7 @@
         var displayConfigForm = $('display-form');
         var wsserverConfigForm = $('wsserver-form');
         var mqttForm = $('mqtt-form');
+        var colorAdjustForm = $('color-adjust-form');
 
         wifiConfigForm.addEventListener('submit', function(event) {
             event.preventDefault();
@@ -239,6 +347,20 @@
         displayConfigForm.addEventListener('submit', function(event) {
             event.preventDefault();
             submitDisplayConfig();
+        });
+        
+        // 色调滑块实时更新显示值和应用
+        $('color-adjust-r').addEventListener('input', function() {
+            updateColorAdjustValues();
+            applyColorAdjustRealtime();
+        });
+        $('color-adjust-g').addEventListener('input', function() {
+            updateColorAdjustValues();
+            applyColorAdjustRealtime();
+        });
+        $('color-adjust-b').addEventListener('input', function() {
+            updateColorAdjustValues();
+            applyColorAdjustRealtime();
         });
 
         const checkLoading = $('loading-control');
@@ -290,10 +412,104 @@
         function hideLoading(){
             checkLoading.checked = false;
         }
+        
+        // 统一的全屏遮罩函数
+        let overlayElement = null;
+        function showOverlay(message) {
+            if (!overlayElement) {
+                overlayElement = document.createElement('div');
+                overlayElement.style.cssText = `
+                    position: fixed;
+                    top: 0;
+                    left: 0;
+                    width: 100%;
+                    height: 100%;
+                    background: rgba(0, 0, 0, 0.6);
+                    display: flex;
+                    align-items: center;
+                    justify-content: center;
+                    z-index: 9999;
+                    font-size: 24px;
+                    color: white;
+                    font-weight: bold;
+                `;
+                document.body.appendChild(overlayElement);
+            }
+            overlayElement.textContent = message || '正在处理...';
+            overlayElement.style.display = 'flex';
+        }
+        
+        function hideOverlay() {
+            if (overlayElement) {
+                overlayElement.style.display = 'none';
+            }
+        }
 
         function showDialog(msg){
             dialogText.innerHTML = msg;
             dialog.checked = true;
+        }
+
+        // WiFi扫描相关函数
+        async function scanWifi() {
+            const scanBtn = event.target;
+            const scanStatus = $('scan-status');
+            const wifiListRow = $('wifi-list-row');
+            const wifiListSelect = $('wifi-list-select');
+            
+            scanBtn.disabled = true;
+            scanStatus.textContent = '正在扫描...';
+            scanStatus.style.color = '#0277bd';
+            
+            try {
+                const response = await fetchWithTimeout('/scan_wifi', {
+                    method: 'GET'
+                }, 15000); // 15秒超时
+                
+                const wifiList = JSON.parse(await response.text());
+                
+                if (wifiList && wifiList.length > 0) {
+                    // 清空现有选项
+                    wifiListSelect.innerHTML = '<option value="">-- 请选择WiFi --</option>';
+                    
+                    // 添加扫描到的WiFi
+                    wifiList.forEach(wifi => {
+                        const option = document.createElement('option');
+                        option.value = wifi.ssid;
+                        option.dataset.authMode = wifi.auth_mode;
+                        // 显示WiFi名称和信号强度
+                        option.textContent = `${wifi.ssid} (${wifi.signal_strength}%)`;
+                        wifiListSelect.appendChild(option);
+                    });
+                    
+                    wifiListRow.style.display = '';
+                    scanStatus.textContent = `找到 ${wifiList.length} 个WiFi网络`;
+                    scanStatus.style.color = '#308732';
+                } else {
+                    scanStatus.textContent = '未找到WiFi网络';
+                    scanStatus.style.color = '#d32f2f';
+                }
+            } catch (e) {
+                console.error('WiFi扫描失败:', e);
+                scanStatus.textContent = '扫描失败: ' + e.message;
+                scanStatus.style.color = '#d32f2f';
+            } finally {
+                scanBtn.disabled = false;
+            }
+        }
+
+        function onWifiSelected() {
+            const wifiListSelect = $('wifi-list-select');
+            const ssidInput = $('ssid1-text');
+            const selectedOption = wifiListSelect.options[wifiListSelect.selectedIndex];
+            
+            if (selectedOption.value) {
+                ssidInput.value = selectedOption.value;
+                // 如果是开放网络，清空密码
+                if (selectedOption.dataset.authMode === 'None') {
+                    $('ssid1-pwd').value = '';
+                }
+            }
         }
 
         async function queryDisplayConfig() {
@@ -340,6 +556,20 @@
                 }
             }catch(e){
                 console.log('wifi信息获取失败:', e);
+            }
+            
+            // 读取色调调整配置
+            try{
+                const colorResponse = await fetch('/color_adjust');
+                if(colorResponse.ok){
+                    const colorData = await colorResponse.json();
+                    $('color-adjust-r').value = colorData.r || 0;
+                    $('color-adjust-g').value = colorData.g || 0;
+                    $('color-adjust-b').value = colorData.b || 0;
+                    updateColorAdjustValues();
+                }
+            }catch(e){
+                console.log('色调配置获取失败:', e);
             }
         }
 
@@ -445,10 +675,8 @@
                 if(deviceip.value.trim().length>0){
                     cfg.device_ip = deviceip.value;
                 }
-                // if(gatewayip.value.trim().length>0){
-                //     cfg.gateway_ip = gatewayip.value;
-                // }
                 
+                // 保存配置
                 const response = await fetchWithTimeout('/wifi_config', {
                     method: 'POST',
                     body: JSON.stringify(cfg)
@@ -722,6 +950,388 @@
 
                 throw error; // 抛出其他错误
             }
+        }
+
+        // ========== Speed Test Functions ==========
+        function logSpeedTest(msg) {
+            const log = $('speedtest-log');
+            const now = new Date().toLocaleTimeString();
+            log.value += `[${now}] ${msg}\n`;
+            log.scrollTop = log.scrollHeight;
+        }
+
+        function formatSpeed(bytesPerSecond) {
+            if (bytesPerSecond >= 1024 * 1024) {
+                return (bytesPerSecond / (1024 * 1024)).toFixed(2) + ' MB/s';
+            } else if (bytesPerSecond >= 1024) {
+                return (bytesPerSecond / 1024).toFixed(2) + ' KB/s';
+            }
+            return bytesPerSecond.toFixed(0) + ' B/s';
+        }
+
+        async function runHttpSpeedTest() {
+            const resultSpan = $('http-speed-result');
+            const dataSize = parseInt($('test-data-size').value);
+            
+            resultSpan.textContent = 'Testing...';
+            resultSpan.style.color = '#666';
+            logSpeedTest(`HTTP Echo test, size: ${(dataSize/1024).toFixed(0)} KB`);
+            
+            try {
+                // Generate test data
+                const testData = new Uint8Array(dataSize);
+                for (let i = 0; i < dataSize; i++) {
+                    testData[i] = i % 256;
+                }
+                
+                const startTime = performance.now();
+                
+                // Server will echo back the same data
+                const response = await fetch('/speed_test_echo', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/octet-stream' },
+                    body: testData
+                });
+                
+                // Read the echoed response
+                const responseData = await response.arrayBuffer();
+                const endTime = performance.now();
+                
+                const roundTripMs = endTime - startTime;
+                // Total bytes = upload + download
+                const totalBytes = dataSize + responseData.byteLength;
+                const bytesPerSecond = (totalBytes / roundTripMs) * 1000;
+                // Single direction speed (divide by 2 for upload or download)
+                const singleDirSpeed = bytesPerSecond / 2;
+                
+                resultSpan.textContent = `${formatSpeed(singleDirSpeed)} (RTT: ${roundTripMs.toFixed(0)}ms)`;
+                resultSpan.style.color = '#1976d2';
+                logSpeedTest(`HTTP: ${formatSpeed(singleDirSpeed)}, RTT: ${roundTripMs.toFixed(0)}ms, total: ${(totalBytes/1024).toFixed(0)}KB`);
+            } catch (e) {
+                resultSpan.textContent = 'Error: ' + e.message;
+                resultSpan.style.color = '#d32f2f';
+                logSpeedTest(`HTTP error: ${e.message}`);
+            }
+        }
+
+        // Global WebSocket connection for speed test (reuse connection)
+        let speedTestSocket = null;
+        
+        async function getSpeedTestSocket() {
+            if (speedTestSocket && speedTestSocket.readyState === WebSocket.OPEN) {
+                return speedTestSocket;
+            }
+            
+            // Close existing socket if any
+            if (speedTestSocket) {
+                try { speedTestSocket.close(); } catch(e) {}
+                speedTestSocket = null;
+            }
+            
+            const wsUrl = 'ws://' + window.location.host + '/ws';
+            speedTestSocket = new WebSocket(wsUrl);
+            speedTestSocket.binaryType = 'arraybuffer';
+            
+            await new Promise((resolve, reject) => {
+                speedTestSocket.onopen = () => {
+                    // Skip welcome message
+                    speedTestSocket.onmessage = () => resolve();
+                };
+                speedTestSocket.onerror = () => reject(new Error('WebSocket connection failed'));
+                setTimeout(() => reject(new Error('WebSocket connection timeout')), 5000);
+            });
+            
+            return speedTestSocket;
+        }
+        
+        async function runWsSpeedTest() {
+            const resultSpan = $('ws-speed-result');
+            const dataSize = parseInt($('test-data-size').value);
+            
+            // Limit WebSocket test to 200KB to avoid memory issues on ESP32
+            const MAX_WS_TEST_SIZE = 200 * 1024;
+            const actualSize = Math.min(dataSize, MAX_WS_TEST_SIZE);
+            
+            if (dataSize > MAX_WS_TEST_SIZE) {
+                logSpeedTest(`WebSocket test limited to ${MAX_WS_TEST_SIZE/1024}KB (ESP32 memory limit)`);
+            }
+            
+            resultSpan.textContent = 'Testing...';
+            resultSpan.style.color = '#666';
+            logSpeedTest(`WebSocket Echo test, size: ${(actualSize/1024).toFixed(0)} KB`);
+            
+            try {
+                const socket = await getSpeedTestSocket();
+                
+                // Generate test data
+                const header = new TextEncoder().encode('ECHO_TEST:');
+                const testData = new Uint8Array(actualSize);
+                for (let i = 0; i < actualSize; i++) {
+                    testData[i] = i % 256;
+                }
+                const fullData = new Uint8Array(header.length + testData.length);
+                fullData.set(header);
+                fullData.set(testData, header.length);
+                
+                const startTime = performance.now();
+                
+                // Setup response handler
+                const responsePromise = new Promise((resolve, reject) => {
+                    socket.onmessage = (event) => {
+                        if (event.data instanceof ArrayBuffer) {
+                            resolve(event.data.byteLength);
+                        } else if (typeof event.data === 'string') {
+                            // Text response (error message)
+                            reject(new Error(event.data));
+                        }
+                    };
+                    socket.onerror = () => reject(new Error('WebSocket error'));
+                    setTimeout(() => reject(new Error('WebSocket response timeout')), 15000);
+                });
+                
+                // Send data as single message
+                socket.send(fullData);
+                
+                const receivedBytes = await responsePromise;
+                const endTime = performance.now();
+                
+                const roundTripMs = endTime - startTime;
+                // Total bytes = upload + download
+                const totalBytes = actualSize + receivedBytes;
+                const bytesPerSecond = (totalBytes / roundTripMs) * 1000;
+                const singleDirSpeed = bytesPerSecond / 2;
+                
+                resultSpan.textContent = `${formatSpeed(singleDirSpeed)} (RTT: ${roundTripMs.toFixed(0)}ms)`;
+                resultSpan.style.color = '#308732';
+                logSpeedTest(`WebSocket: ${formatSpeed(singleDirSpeed)}, RTT: ${roundTripMs.toFixed(0)}ms, total: ${(totalBytes/1024).toFixed(0)}KB`);
+            } catch (e) {
+                resultSpan.textContent = 'Error: ' + e.message;
+                resultSpan.style.color = '#d32f2f';
+                logSpeedTest(`WebSocket error: ${e.message}`);
+                // Close broken socket
+                if (speedTestSocket) {
+                    try { speedTestSocket.close(); } catch(ex) {}
+                    speedTestSocket = null;
+                }
+            }
+        }
+
+        // 更新色调调整显示值
+        function updateColorAdjustValues() {
+            const r = $('color-adjust-r').value;
+            const g = $('color-adjust-g').value;
+            const b = $('color-adjust-b').value;
+            $('color-adjust-r-value').textContent = (r > 0 ? '+' : '') + r;
+            $('color-adjust-g-value').textContent = (g > 0 ? '+' : '') + g;
+            $('color-adjust-b-value').textContent = (b > 0 ? '+' : '') + b;
+        }
+        
+        // 实时应用色调调整（类似屏幕旋转的实时生效）
+        let colorAdjustTimeout = null;
+        let isApplyingColorAdjust = false;
+        async function applyColorAdjustRealtime() {
+            const r = parseInt($('color-adjust-r').value);
+            const g = parseInt($('color-adjust-g').value);
+            const b = parseInt($('color-adjust-b').value);
+            
+            // 防抖：用户停止拖动滑块300ms后才发送请求
+            if (colorAdjustTimeout) {
+                clearTimeout(colorAdjustTimeout);
+            }
+            
+            colorAdjustTimeout = setTimeout(async () => {
+                // 防止并发请求
+                if (isApplyingColorAdjust) {
+                    return;
+                }
+                
+                isApplyingColorAdjust = true;
+                const adjustText = 'R:' + (r > 0 ? '+' : '') + r + ' G:' + (g > 0 ? '+' : '') + g + ' B:' + (b > 0 ? '+' : '') + b;
+                showOverlay('正在应用色调: ' + adjustText);
+                
+                try{
+                    const response = await fetch('/color_adjust', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ r, g, b })
+                    });
+                    
+                    const text = await response.text();
+                    if (text === 'OK') {
+                        console.log('色调已实时应用: R=' + r + ', G=' + g + ', B=' + b);
+                        // 成功后等待500ms让用户看到屏幕上的效果
+                        setTimeout(() => {
+                            hideOverlay();
+                            isApplyingColorAdjust = false;
+                        }, 500);
+                    } else {
+                        hideOverlay();
+                        isApplyingColorAdjust = false;
+                        showDialog('色调调整失败: ' + text);
+                    }
+                } catch(e) {
+                    hideOverlay();
+                    isApplyingColorAdjust = false;
+                    showDialog('色调调整失败: ' + e);
+                }
+            }, 300);
+        }
+        
+        // 应用色调预设
+        function applyColorPreset(preset) {
+            let r = 0, g = 0, b = 0;
+            
+            switch(preset) {
+                case 'fix-blue':
+                    // 修复偏蓝：降低蓝色通道
+                    r = 0;
+                    g = 0;
+                    b = -30;
+                    break;
+                case 'fix-yellow':
+                    // 修复偏黄：降低红色和绿色
+                    r = -15;
+                    g = -15;
+                    b = 0;
+                    break;
+                case 'warm':
+                    // 暖色调：增强红色，降低蓝色
+                    r = 20;
+                    g = 10;
+                    b = -15;
+                    break;
+                case 'cool':
+                    // 冷色调：降低红色，增强蓝色
+                    r = -15;
+                    g = 0;
+                    b = 20;
+                    break;
+            }
+            
+            $('color-adjust-r').value = r;
+            $('color-adjust-g').value = g;
+            $('color-adjust-b').value = b;
+            updateColorAdjustValues();
+            applyColorAdjustRealtime();
+        }
+        
+        // 重置色调调整
+        function resetColorAdjust() {
+            $('color-adjust-r').value = 0;
+            $('color-adjust-g').value = 0;
+            $('color-adjust-b').value = 0;
+            updateColorAdjustValues();
+            // 立即应用重置后的值到屏幕
+            applyColorAdjustRealtime();
+        }
+        
+        // 实时应用屏幕旋转（无需重启）
+        async function applyRotationRealtime() {
+            const rotation = $('disp-rotation');
+            const rotationValue = 'Deg' + rotation.value.replace('度', '');
+            
+            showOverlay('正在应用旋转: ' + rotation.value);
+            try {
+                const response = await fetch('/display_rotation', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ rotation: rotationValue })
+                });
+                
+                const text = await response.text();
+                if (text != 'OK') {
+                    hideOverlay();
+                    showDialog('旋转方向更新失败: ' + text);
+                } else {
+                    // 成功后等待500ms让用户看到屏幕上的确认信息
+                    setTimeout(() => {
+                        hideOverlay();
+                    }, 500);
+                }
+            } catch(e) {
+                hideOverlay();
+                showDialog('旋转方向更新失败: ' + e);
+            }
+        }
+        
+        // 实时重连WiFi（部分生效，完整重连可能需要重启）
+        async function reconnectWifi() {
+            const ssid = $('ssid1-text').value;
+            const password = $('ssid1-pwd').value;
+            const deviceIp = $('deviceip-text').value;
+            
+            if (!ssid || ssid.trim() === '') {
+                showDialog('请填写WiFi名称(SSID)');
+                return;
+            }
+            
+            if (!confirm('确定要重新连接WiFi吗？\n\n注意：如果新WiFi连接失败，可能会导致设备无法访问。\n完整的WiFi重连可能需要重启设备才能生效。')) {
+                return;
+            }
+            
+            showLoading();
+            try {
+                const response = await fetch('/wifi_reconnect', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ 
+                        ssid: ssid, 
+                        password: password,
+                        device_ip: deviceIp
+                    })
+                });
+                
+                const text = await response.text();
+                if (text != 'OK') {
+                    showDialog('WiFi重连失败: ' + text);
+                } else {
+                    showDialog('WiFi配置已保存，正在后台重连...\n\n如果设备无法连接新WiFi，请重启设备。');
+                }
+            } catch(e) {
+                showDialog('WiFi重连失败: ' + e);
+            }
+            hideLoading();
+        }
+        
+        // 实时重连MQTT（无需重启）
+        async function reconnectMqtt() {
+            const url = $('mqtt-url-text').value;
+            const clientId = $('mqtt-id-text').value;
+            const username = $('mqtt-username-text').value;
+            const password = $('mqtt-password-text').value;
+            const topic = $('mqtt-topic-text').value;
+            const qos = parseInt($('mqtt-qos').value);
+            
+            if (!url || url.trim() === '') {
+                showDialog('请填写MQTT服务器地址');
+                return;
+            }
+            
+            showLoading();
+            try {
+                const response = await fetch('/mqtt_reconnect', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        url: url,
+                        client_id: clientId,
+                        username: username,
+                        password: password,
+                        topic: topic,
+                        qos: qos
+                    })
+                });
+                
+                const text = await response.text();
+                if (text != 'OK') {
+                    showDialog('MQTT重连失败: ' + text);
+                } else {
+                    showDialog('MQTT配置已保存，正在后台重连...');
+                }
+            } catch(e) {
+                showDialog('MQTT重连失败: ' + e);
+            }
+            hideLoading();
         }
 
         queryWifiConfig();

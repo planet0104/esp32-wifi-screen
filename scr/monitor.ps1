@@ -9,34 +9,68 @@ if (-not $p) {
     exit
 }
 
-while (1){
-    try {
+# 设置 CTRL+C 处理
+$port = $null
+$running = $true
 
+# 注册 CTRL+C 处理器
+[Console]::TreatControlCAsInput = $false
+$cleanupScript = {
+    param($sender, $e)
+    $script:running = $false
+    if ($null -ne $script:port -and $script:port.IsOpen) {
+        $script:port.Close()
+    }
+    Write-Host "`nMonitor stopped."
+    exit 0
+}
+
+# 注册取消事件
+try {
+    [Console]::CancelKeyPress.Add($cleanupScript)
+} catch {
+    # 忽略注册失败
+}
+
+while ($running){
+    try {
         Write-Host "Opening $p..."
 
         $port = New-Object System.IO.Ports.SerialPort $p, 115200, None, 8, one
-        
+        $port.ReadTimeout = 1000  # 1秒超时，允许响应CTRL+C
         $port.Open()
 
-        Write-Host "Listening $p..."
+        Write-Host "Listening $p... (Press CTRL+C to stop)"
         
-        for(;;)
+        while($running -and $port.IsOpen)
         {
-            if ($port.IsOpen)
-            {
+            try {
                 $data = $port.ReadLine()
                 Write-Output $data
+            }
+            catch [System.TimeoutException] {
+                # 超时是正常的，继续循环以检查 $running 状态
+                continue
             }
         }
     }
     catch {
-        try {
-            $port.Close();
+        if ($null -ne $port -and $port.IsOpen) {
+            try {
+                $port.Close()
+            }
+            catch {
+                # 忽略关闭错误
+            }
         }
-        catch {
-            
+        if ($running) {
+            Write-Host "Error: $_"
+            Start-Sleep -Milliseconds 3000
         }
-        Write-Host "Error: $_"
-        Start-Sleep -Milliseconds 3000
     }
+}
+
+# 清理
+if ($null -ne $port -and $port.IsOpen) {
+    $port.Close()
 }
