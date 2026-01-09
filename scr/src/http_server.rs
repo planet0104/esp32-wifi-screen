@@ -119,6 +119,63 @@ pub fn start_http_server() -> Result<()>{
         }
     })?;
 
+    // HTTP POST 速度测试 (Echo模式 - 回显数据)
+    server.fn_handler("/speed_test_echo", Method::Post, |mut req| {
+        let len = req.content_len().unwrap_or(0) as usize;
+        // Allow up to 1.5MB for speed test
+        const MAX_SPEED_TEST_SIZE: usize = 1024 * 1024 + 512 * 1024;
+        if len > MAX_SPEED_TEST_SIZE {
+            return req
+                .into_response(400, Some("Too Large"), &[])?
+                .write_all(b"Data too large (max 1.5MB)")
+                .map(|_| ());
+        }
+        
+        // Read all data first, then echo back
+        let mut buf = vec![0u8; len];
+        if req.read_exact(&mut buf).is_err() {
+            return req
+                .into_response(400, Some("Read Error"), &[])?
+                .write_all(b"Read error")
+                .map(|_| ());
+        }
+        
+        // Echo back the received data
+        req.into_response(
+            200,
+            Some("OK"),
+            &[("Content-Type", "application/octet-stream")],
+        )?
+        .write_all(&buf)
+        .map(|_| ())
+    })?;
+
+    // HTTP POST 速度测试 (旧接口保持兼容)
+    server.fn_handler("/speed_test", Method::Post, |mut req| {
+        let len = req.content_len().unwrap_or(0) as usize;
+        if len > MAX_HTTP_PAYLOAD_LEN {
+            return req
+                .into_response(400, Some("Too Large"), &[])?
+                .write_all(b"Data too large")
+                .map(|_| ());
+        }
+        
+        // Read all data
+        let mut buf = vec![0u8; len];
+        if req.read_exact(&mut buf).is_err() {
+            return req
+                .into_response(400, Some("Read Error"), &[])?
+                .write_all(b"Read error")
+                .map(|_| ());
+        }
+        
+        let result = format!("OK:{} bytes", len);
+        
+        req.into_response(200, Some("OK"), &[("Content-Type", "text/plain")])?
+            .write_all(result.as_bytes())
+            .map(|_| ())
+    })?;
+
     // HTTP POST 保存wifi配置
     server.fn_handler(
         "/wifi_config",
@@ -661,7 +718,6 @@ pub fn start_http_server() -> Result<()>{
                 ws.send(FrameType::Text(false), "Welcome".as_bytes())?;
                 return Ok(());
             } else if ws.is_closed() {
-                // info!("Closed WebSocket session...");
                 return Ok(());
             }
     
@@ -670,14 +726,30 @@ pub fn start_http_server() -> Result<()>{
                 Err(_e) => return Ok(())
             };
     
-            if len > MAX_HTTP_PAYLOAD_LEN {
-                ws.send(FrameType::Text(false), "Request too big".as_bytes())?;
+            // Check memory before allocating buffer
+            let free_heap = unsafe { esp_get_free_heap_size() } as usize;
+            const MIN_FREE_HEAP: usize = 100 * 1024; // Keep at least 100KB free
+            
+            if free_heap < MIN_FREE_HEAP {
+                warn!("Low memory, rejecting WebSocket request. free_heap={}", free_heap);
+                let _ = ws.send(FrameType::Text(false), "Server busy, low memory".as_bytes());
+                return Ok(());
+            }
+            
+            // Limit WebSocket payload size (512KB max for echo test)
+            const MAX_WS_PAYLOAD: usize = 512 * 1024;
+            if len > MAX_WS_PAYLOAD {
+                let _ = ws.send(FrameType::Text(false), "Request too big (max 512KB)".as_bytes());
                 return Ok(());
             }
     
-            let mut buf = Box::new([0; MAX_HTTP_PAYLOAD_LEN]);
-            ws.recv(buf.as_mut())?;
-            let mut data: &[u8] = &buf[0..len];
+            // Allocate buffer based on actual data size (with safety margin)
+            let buf_size = len.min(MAX_WS_PAYLOAD);
+            let mut buf = vec![0u8; buf_size];
+            if ws.recv(&mut buf).is_err() {
+                return Ok(());
+            }
+            let mut data: &[u8] = &buf[0..len.min(buf_size)];
 
             // info!("ws recv data:{}", data.len());
 
@@ -702,11 +774,29 @@ pub fn start_http_server() -> Result<()>{
                     }
                 }
                 FrameType::Binary(_) => {
+                    // Check for echo test prefix - echo back the data
+                    const ECHO_TEST_PREFIX: &[u8] = b"ECHO_TEST:";
+                    if data.starts_with(ECHO_TEST_PREFIX) {
+                        let payload = &data[ECHO_TEST_PREFIX.len()..];
+                        // Echo back the payload as binary
+                        let _ = ws.send(FrameType::Binary(false), payload);
+                        return Ok(());
+                    }
+                    
+                    // Check for speed test prefix (legacy)
+                    const SPEED_TEST_PREFIX: &[u8] = b"SPEED_TEST:";
+                    if data.starts_with(SPEED_TEST_PREFIX) {
+                        let payload_len = data.len() - SPEED_TEST_PREFIX.len();
+                        let result = format!("OK:{} bytes", payload_len);
+                        let _ = ws.send(FrameType::Text(false), result.as_bytes());
+                        return Ok(());
+                    }
+                    
                     //判断图片类型
                     let mime = mimetype::detect(data.as_ref());
                     // info!("mime:{mime:?}");
                     match ctx.display.as_mut() {
-                        None => error!("请设置屏幕参数!"),
+                        None => error!("Display not configured!"),
                         Some(display_manager) => {
                             // info!("mime:{mime:?}");
                             if mime.extension.ends_with("jpg") || mime.extension.ends_with("jpeg") {
@@ -744,18 +834,21 @@ pub fn start_http_server() -> Result<()>{
                     }
                 }
                 FrameType::Ping => {
-                    info!("frame type: Ping");
+                    // Respond with Pong
+                    let _ = ws.send(FrameType::Pong, &[]);
                 }
                 FrameType::Pong => {
-                    info!("frame type: Pong");
+                    // Ignore pong frames
                 }
                 FrameType::Close => {
-                    info!("frame type: Close");
+                    // Connection closing
                 }
                 FrameType::SocketClose => {
-                    info!("frame type: SocketClose");
+                    // Socket closing
                 }
-                FrameType::Continue(_) => (),
+                FrameType::Continue(_) => {
+                    // Continuation frame, ignore
+                }
             };
             Ok(())
         });
@@ -1005,6 +1098,12 @@ fn handle_display_config(
 fn create_server() -> anyhow::Result<EspHttpServer<'static>> {
     let server_configuration = esp_idf_svc::http::server::Configuration {
         stack_size: STACK_SIZE,
+        // Increase max open sockets for better concurrent request handling
+        max_open_sockets: 7,
+        // Enable LRU purge to recycle idle connections faster
+        lru_purge_enable: true,
+        // Reduce session timeout for faster connection recycling (5 minutes)
+        session_timeout: std::time::Duration::from_secs(5 * 60),
         ..Default::default()
     };
 

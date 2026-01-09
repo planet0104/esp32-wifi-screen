@@ -309,26 +309,8 @@ fn start_wifi() -> anyhow::Result<()> {
                 .set_configuration(&Configuration::AccessPoint(ap_config))?;
         }
 
-        unsafe{
-            
-            esp_wifi_set_ps(wifi_ps_type_t_WIFI_PS_NONE);
-            // esp_wifi_config_80211_tx_rate(wifi_interface_t_WIFI_IF_STA, wifi_phy_rate_t_WIFI_PHY_RATE_11M_S);
-            // let mut getprotocol = 0;
-            // let err = esp_wifi_get_protocol(wifi_interface_t_WIFI_IF_STA, &mut getprotocol);
-            // info!("getprotocol -> err = {err} getprotocol = {getprotocol}");
-            // if getprotocol as u32 & WIFI_PROTOCOL_11N > 0 {
-            //     info!("getprotocol -> WiFi_Protocol_11n");
-            // }
-            // if getprotocol as u32 & esp_idf_svc::sys::WIFI_PROTOCOL_11G > 0 {
-            //     info!("getprotocol -> WiFi_Protocol_11g");
-            // }
-            // if getprotocol as u32 & WIFI_PROTOCOL_11B > 0 {
-            //     info!("getprotocol -> WiFi_Protocol_11b");
-            // }
-            // if getprotocol as u32 & esp_idf_svc::sys::WIFI_PROTOCOL_11AX > 0 {
-            //     info!("getprotocol -> WIFI_PROTOCOL_11AX");
-            // }
-        }
+        // Disable WiFi power save for maximum throughput and minimum latency
+        unsafe { esp_wifi_set_ps(wifi_ps_type_t_WIFI_PS_NONE) };
 
         if let Err(err) = ctx.wifi.start(){
             error!("wifi start: {err:?}");

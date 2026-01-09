@@ -1,3 +1,147 @@
+# ESP32 WiFi Screen
+
+基于 ESP32-S2 的 WiFi 显示屏项目，支持通过 HTTP/WebSocket/MQTT 远程控制 TFT 显示屏。
+
+[English](README.en.md)
+
+## 功能特性
+
+- **多种显示屏支持**：ST7735、ST7789、ST7796 系列 TFT 显示屏
+- **多种通信方式**：HTTP API、WebSocket、MQTT
+- **Web 配置界面**：通过浏览器配置 WiFi、显示屏参数
+- **图像传输**：支持 JPEG、RGB565、LZ4 压缩格式
+- **画布绘制**：支持文字、图形、图像等元素绘制
+
+## 性能测试
+
+### WiFi 传输速度（ESP32-S2 @ 240MHz + 2MB PSRAM）
+
+| 协议 | 最低速度 | 最高速度 | 典型速度 | 备注 |
+|------|----------|----------|----------|------|
+| HTTP Echo | 120 KB/s | 694 KB/s | ~280 KB/s | 单次请求/响应 |
+| WebSocket Echo | 128 KB/s | 751 KB/s | ~350 KB/s | 长连接，性能更稳定 |
+
+> **测试条件**：100KB 数据往返测试（Echo），WiFi 2.4GHz，实际速度受信号强度和环境干扰影响。
+
+### 性能说明
+
+- **峰值速度**：约 750 KB/s（6 Mbps），接近 ESP32-S2 WiFi 理论极限
+- **速度波动**：2.4GHz WiFi 环境干扰会导致速度波动
+- **WebSocket 优势**：长连接避免了 HTTP 连接开销，平均速度更高
+
+## 硬件要求
+
+- ESP32-S2 开发板（带 PSRAM）
+- 支持的 TFT 显示屏（见下方接线说明）
+
+## 接线说明
+
+### 通用引脚定义
+
+| 显示屏引脚 | ESP32-S2 引脚 | 说明 |
+|-----------|--------------|------|
+| GND | GND | 接地 |
+| VCC | 3V3 | 电源 3.3V |
+| SCL/CLK | GPIO6 | SPI 时钟 |
+| SDA/MOSI | GPIO7 | SPI 数据 |
+| RST/RES | GPIO8 | 复位 |
+| DC/AO | GPIO5 | 数据/命令选择 |
+| CS | GPIO4 | 片选（部分屏幕需要） |
+| BL/BLK | 悬空或VBUS | 背光（可接 VBUS 5V） |
+
+### 各屏幕接线参考
+
+#### ST7735S 80x160（带CS）
+
+![ST7735S 80x160](images/ST7735S_80x160_CS.png)
+
+```
+GND -> GND
+VCC -> 3V3
+SCL -> GPIO6
+SDA -> GPIO7
+RST -> GPIO8
+DC  -> GPIO5
+CS  -> GPIO4
+BLK -> (悬空或VBUS)
+```
+
+#### ST7735S 128x160（带CS）
+
+![ST7735S 128x160](images/ST7735S_128x160_CS.png)
+
+```
+GND -> GND
+VCC -> 3V3
+SCL -> GPIO6
+SDA -> GPIO7
+RST -> GPIO8
+DC  -> GPIO5
+CS  -> GPIO4
+BL  -> (悬空或VBUS)
+```
+
+#### ST7789 240x240（无CS）
+
+![ST7789 240x240](images/ST7789_240x240.png)
+
+```
+GND -> GND
+VCC -> 3V3
+SCL -> GPIO6
+SDA -> GPIO7
+RES -> GPIO8
+DC  -> GPIO5
+BLK -> (悬空或VBUS)
+```
+
+#### ST7789 240x320（带CS）
+
+![ST7789 240x320](images/ST7789_240x320_CS.png)
+
+```
+GND -> GND
+VCC -> 3V3
+SCL -> GPIO6
+SDA -> GPIO7
+RST -> GPIO8
+AO  -> GPIO5
+CS  -> GPIO4
+BL  -> VBUS
+```
+
+#### ST7789V 135x240（带CS）
+
+![ST7789V 135x240](images/ST7789V_135x240_CS.png)
+
+```
+GND -> GND
+VCC -> 3V3
+SCL -> GPIO6
+SDA -> GPIO7
+RES -> GPIO8
+DC  -> GPIO5
+CS  -> GPIO4
+BLK -> (悬空或VBUS)
+```
+
+#### ST7796 320x480（带CS）
+
+![ST7796 320x480](images/ST7796.jpg)
+
+```
+GND -> GND
+VCC -> 3V3
+SCL -> GPIO6
+SDA -> GPIO7
+RST -> GPIO8
+DC  -> GPIO5
+CS  -> GPIO4
+BL  -> VBUS
+```
+
+> **注意**：接线图片保存在 `images/` 文件夹中。
+
 ## 安装步骤
 
 ### 方式一：使用 espup 安装（推荐）
@@ -51,21 +195,7 @@
    ESP_IDF_SDKCONFIG_DEFAULTS = { value = "sdkconfig.defaults", relative = true }
    ```
 
-   c) **配置库文件路径**
-   
-   在 `.cargo/config.toml` 的 `rustflags` 中，将库路径设置为项目的实际路径：
-   ```toml
-   [target.xtensa-esp32s2-espidf]
-   rustflags = [
-       "--cfg",  "espidf_time64",
-       "-L", "C:/Users/你的用户名/Documents/GitHub/esp32-wifi-screen/scr/library",
-       "-l", "tjpgd"
-   ]
-   ```
-   
-   > **注意**：将路径中的"你的用户名"替换为实际的用户名，或使用相对路径
-
-   **注意**：由于本项目已经使用纯 Rust 实现的 `tjpg-decoder` 库，不再需要链接 C 库。可以移除 rustflags 中的 `-L` 和 `-l` 参数：
+   c) **配置 rustflags**（可选，本项目使用纯 Rust 实现）
    ```toml
    [target.xtensa-esp32s2-espidf]
    rustflags = [
@@ -83,7 +213,7 @@
    . .\espup_env.ps1
    ```
 
-6. **编译和烧写**
+7. **编译和烧写**
    ```powershell
    # 方式 1：使用 build.ps1 脚本编译并生成固件文件
    . .\build.ps1
@@ -95,71 +225,48 @@
    # 生成固件文件
    espflash save-image --chip esp32s2 --partition-table partitions.csv target/xtensa-esp32s2-espidf/release/esp32-wifi-screen esp32-wifi-screen.bin
    
-   # 烧写固件到设备（需要修改串口名称）
+   # 烧写固件到设备
    espflash flash --monitor target/xtensa-esp32s2-espidf/release/esp32-wifi-screen
    
    # 或使用 flash.ps1 脚本烧写
    .\flash.ps1
    ```
-   
-   **espflash 常用命令**：
-   ```powershell
-   # 查看可用串口
-   espflash board-info
-   
-   # 烧写并监控串口输出
-   espflash flash --monitor target/xtensa-esp32s2-espidf/release/esp32-wifi-screen
-   
-   # 指定串口烧写
-   espflash flash --port COM3 target/xtensa-esp32s2-espidf/release/esp32-wifi-screen
-   
-   # 擦除闪存
-   espflash erase-flash
-   ```
-   
-   **首次编译注意**：
-   - 首次执行 `cargo build` 会从 GitHub 克隆相关库到 `C:/esp/.embuild` 文件夹
-   - **必须开启 Clash 全局代理**，否则会克隆失败（错误：`Recv failure: Connection was reset`）
-   - 如果遇到 `could not find Cargo.toml` 错误，请注释掉 `.cargo/config.toml` 中的 `target-dir` 配置
-   - 首次编译耗时较久（10-30分钟），请耐心等待
 
 ### 方式二：使用 ESP-IDF 官方安装器
 
 1. **下载并安装 ESP-IDF 5.3**
    - 官网：https://dl.espressif.com.cn/dl/esp-idf/index.html
-   - 可选择安装 Rust 相关组件（需要全局代理）
-   - 或不选择 Rust 组件，手动安装（推荐方式一）
+   - 可选择安装 Rust 相关组件
 
 2. **使用 ESP-IDF 控制台**
    - 打开 ESP-IDF 5.3 CMD 控制台
-   - 进入项目目录
-   - 执行 `code .` 打开项目
+   - 进入项目目录执行编译
 
-### 注意事项
+## 常用命令
 
-- **纯 Rust 实现**：本项目已使用纯 Rust 的 `tjpg-decoder` 库，不再需要 C 库链接
-- **路径长度限制**：ESP-IDF 要求编译输出路径极短，**必须**使用 `target-dir = "C:/t"` 等超短路径
-- **网络代理**：首次编译必须开启全局代理访问 GitHub
-- **sdkconfig 配置**：`ESP_IDF_SDKCONFIG_DEFAULTS` 需要正确指向 `sdkconfig.defaults` 文件
-- **串口配置**：烧写时可通过 `espflash board-info` 查看可用串口
+```powershell
+# 查看可用串口
+espflash board-info
 
-### 构建脚本说明
+# 烧写并监控串口输出
+espflash flash --monitor target/xtensa-esp32s2-espidf/release/esp32-wifi-screen
 
-所有构建脚本都支持自动从 `.cargo/config.toml` 读取 `target-dir` 配置，无需手动修改路径。
+# 指定串口烧写
+espflash flash --port COM3 target/xtensa-esp32s2-espidf/release/esp32-wifi-screen
 
-- **build.ps1**：编译项目并生成 `.bin` 固件文件
-  - 自动检测 target-dir 配置
-  - 编译 release 版本
-  - 生成 `esp32-wifi-screen.bin` 固件文件
-  
-- **flash.ps1**：编译、生成固件并烧写到设备
-  - 自动检测 target-dir 配置
-  - 自动检测可用串口（COM3, COM10, COM6）
-  - 使用 esptool 烧写固件
-  - 烧写完成后自动启动串口监控
-  
-- **monitor.ps1**：监控串口输出
-  - 用法：`.\monitor.ps1 -p COM3`
+# 擦除闪存
+espflash erase-flash
+```
+
+## 构建脚本说明
+
+所有构建脚本都支持自动从 `.cargo/config.toml` 读取 `target-dir` 配置。
+
+| 脚本 | 功能 |
+|------|------|
+| `build.ps1` | 编译项目并生成 `.bin` 固件文件 |
+| `flash.ps1` | 编译、生成固件并烧写到设备 |
+| `monitor.ps1` | 监控串口输出（用法：`.\monitor.ps1 -p COM3`） |
 
 **推荐工作流**：
 ```powershell
@@ -169,3 +276,21 @@
 # 或 编译 + 烧写 + 监控（一步到位）
 . .\flash.ps1
 ```
+
+## 注意事项
+
+- **纯 Rust 实现**：本项目已使用纯 Rust 的 `tjpgd` 库，不再需要 C 库链接
+- **路径长度限制**：ESP-IDF 要求编译输出路径极短，**必须**使用 `target-dir = "C:/t"` 等超短路径
+- **网络代理**：首次编译必须开启全局代理访问 GitHub
+- **首次编译耗时**：首次编译需要 10-30 分钟，请耐心等待
+
+## 使用说明
+
+1. 烧写固件后，设备会创建名为 `ESP32-Screen-XXXXXX` 的 WiFi 热点
+2. 连接热点后，访问 `http://192.168.72.1` 进入配置页面
+3. 配置 WiFi 和显示屏参数后保存
+4. 设备重启后连接到指定 WiFi，可通过局域网访问
+
+## License
+
+MIT License

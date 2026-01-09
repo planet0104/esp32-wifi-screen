@@ -211,6 +211,45 @@
         </div>
     </form>
 
+    <form id="speedtest-form" autocomplete="off">
+        <fieldset>
+            <legend class="doc">传输速度测试</legend>
+            <div class="row responsive-label">
+                <div class="col-sm-12 col-md-3"><label class="doc">测试数据大小:</label></div>
+                <div class="col-sm-12 col-md">
+                    <select id="test-data-size" style="width:85%;" class="doc">
+                        <option value="10240">10 KB</option>
+                        <option value="51200">50 KB</option>
+                        <option value="102400" selected>100 KB</option>
+                        <option value="204800">200 KB</option>
+                        <option value="524288">512 KB</option>
+                        <option value="1048576">1 MB</option>
+                    </select>
+                </div>
+            </div>
+            <div class="row responsive-label">
+                <div class="col-sm-12 col-md-3"><label class="doc">HTTP速度:</label></div>
+                <div class="col-sm-12 col-md">
+                    <span id="http-speed-result" style="font-weight: bold; color: #1976d2;">--</span>
+                    <button class="tertiary" onclick="runHttpSpeedTest()" type="button" style="margin-left: 10px;">测试HTTP</button>
+                </div>
+            </div>
+            <div class="row responsive-label">
+                <div class="col-sm-12 col-md-3"><label class="doc">WebSocket速度:</label></div>
+                <div class="col-sm-12 col-md">
+                    <span id="ws-speed-result" style="font-weight: bold; color: #308732;">--</span>
+                    <button class="tertiary" onclick="runWsSpeedTest()" type="button" style="margin-left: 10px;">测试WebSocket</button>
+                </div>
+            </div>
+            <div class="row responsive-label">
+                <div class="col-sm-12 col-md-3"><label class="doc">测试日志:</label></div>
+                <div class="col-sm-12 col-md">
+                    <textarea id="speedtest-log" readonly style="width:85%; height:80px; font-size:12px; font-family:monospace;"></textarea>
+                </div>
+            </div>
+        </fieldset>
+    </form>
+
     <input type="checkbox" id="loading-control" class="modal">
     <div>
         <div class="card">
@@ -796,6 +835,170 @@
                 }
 
                 throw error; // 抛出其他错误
+            }
+        }
+
+        // ========== Speed Test Functions ==========
+        function logSpeedTest(msg) {
+            const log = $('speedtest-log');
+            const now = new Date().toLocaleTimeString();
+            log.value += `[${now}] ${msg}\n`;
+            log.scrollTop = log.scrollHeight;
+        }
+
+        function formatSpeed(bytesPerSecond) {
+            if (bytesPerSecond >= 1024 * 1024) {
+                return (bytesPerSecond / (1024 * 1024)).toFixed(2) + ' MB/s';
+            } else if (bytesPerSecond >= 1024) {
+                return (bytesPerSecond / 1024).toFixed(2) + ' KB/s';
+            }
+            return bytesPerSecond.toFixed(0) + ' B/s';
+        }
+
+        async function runHttpSpeedTest() {
+            const resultSpan = $('http-speed-result');
+            const dataSize = parseInt($('test-data-size').value);
+            
+            resultSpan.textContent = 'Testing...';
+            resultSpan.style.color = '#666';
+            logSpeedTest(`HTTP Echo test, size: ${(dataSize/1024).toFixed(0)} KB`);
+            
+            try {
+                // Generate test data
+                const testData = new Uint8Array(dataSize);
+                for (let i = 0; i < dataSize; i++) {
+                    testData[i] = i % 256;
+                }
+                
+                const startTime = performance.now();
+                
+                // Server will echo back the same data
+                const response = await fetch('/speed_test_echo', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/octet-stream' },
+                    body: testData
+                });
+                
+                // Read the echoed response
+                const responseData = await response.arrayBuffer();
+                const endTime = performance.now();
+                
+                const roundTripMs = endTime - startTime;
+                // Total bytes = upload + download
+                const totalBytes = dataSize + responseData.byteLength;
+                const bytesPerSecond = (totalBytes / roundTripMs) * 1000;
+                // Single direction speed (divide by 2 for upload or download)
+                const singleDirSpeed = bytesPerSecond / 2;
+                
+                resultSpan.textContent = `${formatSpeed(singleDirSpeed)} (RTT: ${roundTripMs.toFixed(0)}ms)`;
+                resultSpan.style.color = '#1976d2';
+                logSpeedTest(`HTTP: ${formatSpeed(singleDirSpeed)}, RTT: ${roundTripMs.toFixed(0)}ms, total: ${(totalBytes/1024).toFixed(0)}KB`);
+            } catch (e) {
+                resultSpan.textContent = 'Error: ' + e.message;
+                resultSpan.style.color = '#d32f2f';
+                logSpeedTest(`HTTP error: ${e.message}`);
+            }
+        }
+
+        // Global WebSocket connection for speed test (reuse connection)
+        let speedTestSocket = null;
+        
+        async function getSpeedTestSocket() {
+            if (speedTestSocket && speedTestSocket.readyState === WebSocket.OPEN) {
+                return speedTestSocket;
+            }
+            
+            // Close existing socket if any
+            if (speedTestSocket) {
+                try { speedTestSocket.close(); } catch(e) {}
+                speedTestSocket = null;
+            }
+            
+            const wsUrl = 'ws://' + window.location.host + '/ws';
+            speedTestSocket = new WebSocket(wsUrl);
+            speedTestSocket.binaryType = 'arraybuffer';
+            
+            await new Promise((resolve, reject) => {
+                speedTestSocket.onopen = () => {
+                    // Skip welcome message
+                    speedTestSocket.onmessage = () => resolve();
+                };
+                speedTestSocket.onerror = () => reject(new Error('WebSocket connection failed'));
+                setTimeout(() => reject(new Error('WebSocket connection timeout')), 5000);
+            });
+            
+            return speedTestSocket;
+        }
+        
+        async function runWsSpeedTest() {
+            const resultSpan = $('ws-speed-result');
+            const dataSize = parseInt($('test-data-size').value);
+            
+            // Limit WebSocket test to 200KB to avoid memory issues on ESP32
+            const MAX_WS_TEST_SIZE = 200 * 1024;
+            const actualSize = Math.min(dataSize, MAX_WS_TEST_SIZE);
+            
+            if (dataSize > MAX_WS_TEST_SIZE) {
+                logSpeedTest(`WebSocket test limited to ${MAX_WS_TEST_SIZE/1024}KB (ESP32 memory limit)`);
+            }
+            
+            resultSpan.textContent = 'Testing...';
+            resultSpan.style.color = '#666';
+            logSpeedTest(`WebSocket Echo test, size: ${(actualSize/1024).toFixed(0)} KB`);
+            
+            try {
+                const socket = await getSpeedTestSocket();
+                
+                // Generate test data
+                const header = new TextEncoder().encode('ECHO_TEST:');
+                const testData = new Uint8Array(actualSize);
+                for (let i = 0; i < actualSize; i++) {
+                    testData[i] = i % 256;
+                }
+                const fullData = new Uint8Array(header.length + testData.length);
+                fullData.set(header);
+                fullData.set(testData, header.length);
+                
+                const startTime = performance.now();
+                
+                // Setup response handler
+                const responsePromise = new Promise((resolve, reject) => {
+                    socket.onmessage = (event) => {
+                        if (event.data instanceof ArrayBuffer) {
+                            resolve(event.data.byteLength);
+                        } else if (typeof event.data === 'string') {
+                            // Text response (error message)
+                            reject(new Error(event.data));
+                        }
+                    };
+                    socket.onerror = () => reject(new Error('WebSocket error'));
+                    setTimeout(() => reject(new Error('WebSocket response timeout')), 15000);
+                });
+                
+                // Send data as single message
+                socket.send(fullData);
+                
+                const receivedBytes = await responsePromise;
+                const endTime = performance.now();
+                
+                const roundTripMs = endTime - startTime;
+                // Total bytes = upload + download
+                const totalBytes = actualSize + receivedBytes;
+                const bytesPerSecond = (totalBytes / roundTripMs) * 1000;
+                const singleDirSpeed = bytesPerSecond / 2;
+                
+                resultSpan.textContent = `${formatSpeed(singleDirSpeed)} (RTT: ${roundTripMs.toFixed(0)}ms)`;
+                resultSpan.style.color = '#308732';
+                logSpeedTest(`WebSocket: ${formatSpeed(singleDirSpeed)}, RTT: ${roundTripMs.toFixed(0)}ms, total: ${(totalBytes/1024).toFixed(0)}KB`);
+            } catch (e) {
+                resultSpan.textContent = 'Error: ' + e.message;
+                resultSpan.style.color = '#d32f2f';
+                logSpeedTest(`WebSocket error: ${e.message}`);
+                // Close broken socket
+                if (speedTestSocket) {
+                    try { speedTestSocket.close(); } catch(ex) {}
+                    speedTestSocket = null;
+                }
             }
         }
 
