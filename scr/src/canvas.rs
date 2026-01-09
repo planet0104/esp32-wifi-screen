@@ -15,7 +15,7 @@ use crate::{
     imageproc::{drawing::text_size, pixelops::weighted_sum},
     with_context, Context,
 };
-use tjpgd::{JpegDecoder, MemoryPool, RECOMMENDED_POOL_SIZE};
+use tjpgdec_rs::{JpegDecoder, MemoryPool, RECOMMENDED_POOL_SIZE};
 
 use crate::{ImageCache, WIFI_AP_SSID};
 
@@ -734,7 +734,8 @@ pub fn decode_jpeg_to_rgb565(jpeg_data: &[u8]) -> Result<(u16, u16, Box<Vec<u16>
                         let g = bitmap[byte_idx + 1];
                         let b = bitmap[byte_idx + 2];
                         let pixel = rgb888_to_rgb565(r, g, b);
-                        output[dst_row + x] = pixel.swap_bytes();
+                        // 输出大端序，与 draw_rgb565_fast 的输入约定一致
+                        output[dst_row + x] = pixel.to_be();
                     }
                 }
             }

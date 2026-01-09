@@ -435,32 +435,6 @@ where
         M::ColorFormat::send_pixels_buffer_u16(&mut self.di, pixels)
     }
 
-    /// Fast pixel drawing using PHYSICAL framebuffer coordinates (bypassing both offset AND rotation)
-    /// This method writes directly to the hardware framebuffer without any transformations.
-    /// ONLY use this for initialization tasks like clearing the entire framebuffer.
-    pub fn set_pixels_buffer_u16_no_rotation(
-        &mut self,
-        sx: u16,
-        sy: u16,
-        ex: u16,
-        ey: u16,
-        pixels: &[u16],
-    ) -> Result<(), DI::Error> {
-        // Directly set address window with Rotation::Deg0 to bypass rotation transformation
-        M::update_address_window(
-            &mut self.di,
-            options::Rotation::Deg0,
-            sx,
-            sy,
-            ex,
-            ey,
-        )?;
-
-        M::write_memory_start(&mut self.di)?;
-
-        M::ColorFormat::send_pixels_buffer_u16(&mut self.di, pixels)
-    }
-
     ///
     /// Configures the tearing effect output.
     ///

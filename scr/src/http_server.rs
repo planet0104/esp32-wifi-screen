@@ -205,7 +205,7 @@ pub fn start_http_server() -> Result<()>{
     // HTTP GET 读取wifi配置
     server.fn_handler("/wifi_config", Method::Get, |req| {
         let cfg = with_context(move |ctx| {
-            ctx.enter_config = true;
+            ctx.last_config_time = Some(Instant::now());
             let cfg = ctx.config.wifi_config.as_ref();
             match cfg {
                 Some(cfg) => Ok(serde_json::to_string(&cfg)?),
@@ -235,7 +235,7 @@ pub fn start_http_server() -> Result<()>{
     // HTTP GET 扫描WiFi网络
     server.fn_handler("/scan_wifi", Method::Get, |req| {
         let result = with_context(move |ctx| {
-            ctx.enter_config = true;
+            ctx.last_config_time = Some(Instant::now());
             
             info!("Scanning WiFi networks...");
             
@@ -374,7 +374,7 @@ pub fn start_http_server() -> Result<()>{
     // HTTP GET 读取屏幕参数
     server.fn_handler("/display_config", Method::Get, |req| {
         let cfg = with_context(move |ctx| {
-            ctx.enter_config = true;
+            ctx.last_config_time = Some(Instant::now());
             let mut cfg = ctx.config.display_config.clone();
             if let Some(cfg) = cfg.as_mut(){
                 let (w, h) = cfg.get_screen_size();
@@ -870,8 +870,28 @@ pub fn start_http_server() -> Result<()>{
     
     let _ = server.ws_handler("/ws", move |ws| {
         let _ = with_context(move |ctx|{
+            // 检查内存状态 - 在处理任何 WebSocket 请求之前
+            let free_heap = unsafe { esp_get_free_heap_size() } as usize;
+            const MIN_SAFE_HEAP: usize = 150 * 1024; // 150KB 安全阈值
+            const CRITICAL_HEAP: usize = 80 * 1024;  // 80KB 严重阈值
+            
+            if free_heap < CRITICAL_HEAP {
+                error!("内存严重不足 ({} bytes)，关闭 WebSocket 连接", free_heap);
+                let _ = ws.send(FrameType::Close, &[]);
+                return Ok(());
+            }
+            
             if ws.is_new() {
-                info!("New WebSocket session...");
+                info!("New WebSocket session... (free_heap: {} bytes)", free_heap);
+                
+                // 内存低时拒绝新连接
+                if free_heap < MIN_SAFE_HEAP {
+                    warn!("内存不足，拒绝新 WebSocket 连接 (free_heap: {} bytes)", free_heap);
+                    let _ = ws.send(FrameType::Text(false), "Server busy: Low memory. Please wait and retry.".as_bytes());
+                    let _ = ws.send(FrameType::Close, &[]);
+                    return Ok(());
+                }
+                
                 ws.send(FrameType::Text(false), "Welcome".as_bytes())?;
                 return Ok(());
             } else if ws.is_closed() {
@@ -885,11 +905,11 @@ pub fn start_http_server() -> Result<()>{
     
             // Check memory before allocating buffer
             let free_heap = unsafe { esp_get_free_heap_size() } as usize;
-            const MIN_FREE_HEAP: usize = 100 * 1024; // Keep at least 100KB free
+            const MIN_FREE_HEAP: usize = 120 * 1024; // Keep at least 120KB free
             
             if free_heap < MIN_FREE_HEAP {
-                warn!("Low memory, rejecting WebSocket request. free_heap={}", free_heap);
-                let _ = ws.send(FrameType::Text(false), "Server busy, low memory".as_bytes());
+                warn!("内存低，拒绝 WebSocket 请求 (free_heap: {} bytes)", free_heap);
+                let _ = ws.send(FrameType::Text(false), "Server busy: Low memory".as_bytes());
                 return Ok(());
             }
             
@@ -1086,11 +1106,31 @@ pub fn print_memory(tag: &str){
         esp_get_minimum_free_heap_size()
     };
     info!("{tag} ##> free_heap:{free_heap}, free_internal_heap:{free_internal_heap} minimum_free_heap:{free_mini}");
+    
+    // 紧急重启机制：当内存极低时自动重启，防止系统卡死
+    const CRITICAL_HEAP: u32 = 50 * 1024;  // 50KB
+    const WARNING_HEAP: u32 = 100 * 1024;  // 100KB
+    
+    if free_heap < CRITICAL_HEAP {
+        error!("❗❗❗ 内存极低 ({} bytes)，立即重启以防止系统崩溃!", free_heap);
+        std::thread::sleep(Duration::from_millis(1000));
+        unsafe { esp_restart() };
+    } else if free_heap < WARNING_HEAP {
+        warn!("⚠️ 内存低 ({} bytes)，即将达到重启阈值", free_heap);
+    }
 }
 
 fn handle_draw_canvas(
     req: &mut esp_idf_svc::http::server::Request<&mut EspHttpConnection<'_>>,
 ) -> Result<()> {
+    // 检查内存是否足够（至少需要500KB处理base64图片）
+    let free_heap = unsafe { esp_get_free_heap_size() } as usize;
+    const MIN_REQUIRED_HEAP: usize = 500 * 1024;
+    
+    if free_heap < MIN_REQUIRED_HEAP {
+        return Err(anyhow!("内存不足，拒绝/draw_canvas请求 (free_heap: {} KB，需要至少 {} KB)", free_heap / 1024, MIN_REQUIRED_HEAP / 1024));
+    }
+    
     let len = req.content_len().unwrap_or(0) as usize;
     if len > MAX_HTTP_PAYLOAD_LEN {
         return Err(anyhow!("http请求体不能超过{MAX_HTTP_PAYLOAD_LEN}字节"));
@@ -1105,10 +1145,10 @@ fn handle_draw_canvas(
             let json = unsafe{ str::from_boxed_utf8_unchecked(data.as_slice().into()) };
             draw_json_elements(ctx, &*json)
         }){
-            error!("mqtt parse json:{err:?}");
+            error!("draw_canvas parse json:{err:?}");
         }
     }){
-        info!("mqtt thread error:{err:?}");
+        error!("draw_canvas thread error:{err:?}");
     }
     Ok(())
 }
@@ -1368,6 +1408,14 @@ fn handle_display_rgb565(
     ctx: &mut Context,
     req: &mut esp_idf_svc::http::server::Request<&mut EspHttpConnection<'_>>,
 ) -> Result<(u16, u16, String)> {
+    // 检查内存是否足够
+    let free_heap = unsafe { esp_get_free_heap_size() } as usize;
+    const MIN_REQUIRED_HEAP: usize = 200 * 1024; // 至少需要 200KB
+    
+    if free_heap < MIN_REQUIRED_HEAP {
+        return Err(anyhow!("内存不足，拒绝请求 (free_heap: {} KB)", free_heap / 1024));
+    }
+    
     let t1 = Instant::now();
     let len = req.content_len().unwrap_or(0) as usize;
     let max_len = 500 * 1024;
@@ -1435,7 +1483,11 @@ fn handle_color_adjust(
     // 保存到NVS
     config::save_config(&mut ctx.config_nvs, &ctx.config)?;
     
-    info!("色调调整已更新: R={}, G={}, B={}", adjust.r, adjust.g, adjust.b);
+    // 绘制提示信息来触发屏幕刷新，使色调调整立即可见
+    let adjust_text = format!("R:{} G:{} B:{}", adjust.r, adjust.g, adjust.b);
+    let _ = canvas::draw_splash_with_error(ctx, Some("Color Adjusted"), Some(&adjust_text));
+    
+    info!("Color adjustment updated: R={}, G={}, B={}", adjust.r, adjust.g, adjust.b);
     
     Ok(())
 }
@@ -1444,6 +1496,14 @@ fn handle_display_rgb565_lz4(
     ctx: &mut Context,
     req: &mut esp_idf_svc::http::server::Request<&mut EspHttpConnection<'_>>,
 ) -> Result<(u16, u16, String)> {
+    // 检查内存是否足够
+    let free_heap = unsafe { esp_get_free_heap_size() } as usize;
+    const MIN_REQUIRED_HEAP: usize = 200 * 1024; // 至少需要 200KB
+    
+    if free_heap < MIN_REQUIRED_HEAP {
+        return Err(anyhow!("内存不足，拒绝请求 (free_heap: {} KB)", free_heap / 1024));
+    }
+    
     let t1 = Instant::now();
     let len = req.content_len().unwrap_or(0) as usize;
     let max_len = 500 * 1024;

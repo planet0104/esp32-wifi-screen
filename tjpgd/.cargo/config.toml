@@ -1,3 +1,0 @@
-# Temporary config to disable ESP32 toolchain for testing
-[build]
-# No custom target

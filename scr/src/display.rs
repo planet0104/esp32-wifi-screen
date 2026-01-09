@@ -271,57 +271,7 @@ pub fn init() -> Result<()> {
         };
 
         ctx.display.replace(display_manager);
-        
-        // Clear the entire RAW framebuffer to prevent residual data
-        // Use set_pixels_buffer_u16_raw to bypass display_offset
-        if let Some(display_manager) = ctx.display.as_mut() {
-            info!("init display>09: DisplayManager created, clearing framebuffer...");
-            
-            let (fb_width, fb_height) = match display_manager.display_config.display_type {
-                crate::display::DisplayType::ST7789 => (240u16, 320u16),
-                crate::display::DisplayType::ST7735s => (132u16, 162u16),
-                crate::display::DisplayType::ST7796 => (320u16, 480u16),
-            };
-            
-            info!("  Framebuffer: {}x{}, Display: {}x{}, Offset: ({},{})", 
-                fb_width, fb_height,
-                display_manager.display_config.width.get(),
-                display_manager.display_config.height.get(),
-                display_manager.display_config.x_offset,
-                display_manager.display_config.y_offset);
-            
-            let black_pixels: Vec<u16> = vec![0x0000; fb_width as usize];
-            let mut cleared_rows = 0u16;
-            
-            match &mut display_manager.display {
-                DisplayInterface::ST7789(display) => {
-                    for y in 0..fb_height {
-                        match display.set_pixels_buffer_u16_no_rotation(0, y, fb_width - 1, y, &black_pixels) {
-                            Ok(_) => cleared_rows += 1,
-                            Err(_) => break,
-                        }
-                    }
-                },
-                DisplayInterface::ST7735s(display) => {
-                    for y in 0..fb_height {
-                        match display.set_pixels_buffer_u16_no_rotation(0, y, fb_width - 1, y, &black_pixels) {
-                            Ok(_) => cleared_rows += 1,
-                            Err(_) => break,
-                        }
-                    }
-                },
-                DisplayInterface::ST7796(display) => {
-                    for y in 0..fb_height {
-                        match display.set_pixels_buffer_u16_no_rotation(0, y, fb_width - 1, y, &black_pixels) {
-                            Ok(_) => cleared_rows += 1,
-                            Err(_) => break,
-                        }
-                    }
-                },
-            }
-            
-            info!("init display>10: Cleared {}/{} rows, drawing splash...", cleared_rows, fb_height);
-        }
+        info!("init display>09: DisplayManager created, drawing splash screen...");
 
         match draw_splash_with_error(ctx, Some("正在初始化"), Some("...")) {
             Ok(_) => {},
@@ -427,8 +377,11 @@ pub fn draw_rgb565_fast(
     // 应用色调调整
     let mut adjusted_pixels = Vec::with_capacity(pixels.len());
     for &pixel in pixels {
-        let (r, g, b) = rgb565_to_rgb888_adjusted(pixel, adj_r, adj_g, adj_b);
-        adjusted_pixels.push(rgb888_to_rgb565(r, g, b));
+        // 输入是大端序，转换为本地字节序
+        let pixel_native = u16::from_be(pixel);
+        let (r, g, b) = rgb565_to_rgb888_adjusted(pixel_native, adj_r, adj_g, adj_b);
+        // 调整后转回大端序
+        adjusted_pixels.push(rgb888_to_rgb565(r, g, b).to_be());
     }
     
     let (end_x, end_y) = if display_manager.display_config.inclusive_end_coords{

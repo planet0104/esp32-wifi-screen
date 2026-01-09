@@ -1,5 +1,5 @@
 use core::convert::TryInto;
-use std::{collections::HashMap, net::Ipv4Addr, num::NonZero, sync::Mutex, time::Duration};
+use std::{collections::HashMap, net::Ipv4Addr, num::NonZero, sync::Mutex, time::{Duration, Instant}};
 
 use anyhow::{anyhow, Result};
 use canvas::{
@@ -35,6 +35,7 @@ mod mqtt_client;
 mod http_server;
 
 // Need lots of stack to parse JSON
+// With CONFIG_SPIRAM_ALLOW_STACK_EXTERNAL_MEMORY, stacks can use PSRAM
 const STACK_SIZE: usize = 1024 * 10;
 
 pub const WIFI_AP_SSID: &str = "ESP32-WiFiScreen";
@@ -62,9 +63,10 @@ pub struct Context {
     //存放上传的图片
     #[serde(skip)]
     image_cache: HashMap<String, ImageCache>,
-    //是否进入了设置界面，进入设置洁面后，即使wifi断开也不重启
+    //记录最后一次访问配置页面的时间，用于防止配置期间自动重启
+    //如果超过10分钟没有访问配置，则认为用户已离开，允许自动重启
     #[serde(skip)]
-    enter_config: bool
+    last_config_time: Option<Instant>
 }
 
 static CONTEXT: Lazy<Mutex<Option<Box<Context>>>> = Lazy::new(|| Mutex::new(None));
@@ -211,7 +213,7 @@ fn main() -> anyhow::Result<()> {
             free_internal_heap: 0,
             wifi,
             image_cache: HashMap::new(),
-            enter_config: false,
+            last_config_time: None,
         }));
         info!("Context initialized successfully");
     }
@@ -365,15 +367,24 @@ fn start_wifi() -> anyhow::Result<()> {
         let _ = draw_splash_with_error(ctx, Some("IP:192.168.72.1"), err2.as_ref().map(|x| x.as_str()));
 
         //每隔60秒钟检查wifi是否连接，如果断开连接，自动重启
-        //但如果有用户正在配置（enter_config=true），则跳过重启
+        //但如果用户正在配置（最后访问配置时间在10分钟内），则跳过重启
         std::thread::spawn(move ||{
             loop{
                 std::thread::sleep(Duration::from_secs(60));
                 let _ = with_context(|ctx| {
                     if ctx.config.wifi_config.is_some(){
                         let connected = ctx.wifi.is_connected().unwrap_or(false);
-                        print_memory(&format!("idle connected={connected} enter_config={}",ctx.enter_config));
-                        if !connected && !ctx.enter_config {
+                        
+                        // 检查用户是否在配置中（最后访问时间在10分钟内）
+                        let in_config = if let Some(last_time) = ctx.last_config_time {
+                            last_time.elapsed() < Duration::from_secs(10 * 60)  // 10分钟
+                        } else {
+                            false
+                        };
+                        
+                        print_memory(&format!("idle connected={connected} in_config={in_config}"));
+                        if !connected && !in_config {
+                            info!("WiFi断开且用户未在配置中，准备重启...");
                             std::thread::sleep(Duration::from_millis(500));
                             unsafe { esp_restart() };
                         }

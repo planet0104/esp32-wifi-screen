@@ -164,6 +164,7 @@ fn parse_event<'a>(event: &EspMqttEvent<'a>, text_cache:Arc<Mutex<Box<String>>>)
                 let json = Box::new(text_cache_lock.to_string());
                 text_cache_lock.clear();
                 info!("mqtt json len:{}", json.len());
+                // With CONFIG_SPIRAM_ALLOW_STACK_EXTERNAL_MEMORY, stack uses PSRAM
                 if let Err(err) = std::thread::Builder::new()
                 .stack_size(12*1024)
                 .spawn(move ||{

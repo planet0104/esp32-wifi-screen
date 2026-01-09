@@ -11,6 +11,7 @@ An ESP32-S2 based WiFi display project that supports remote control of TFT displ
 - **Web Configuration Interface**: Configure WiFi and display parameters via browser
 - **Image Transmission**: Supports JPEG, RGB565, LZ4 compression formats
 - **Canvas Drawing**: Supports text, graphics, and image elements
+- **Color Adjustment**: Real-time RGB channel adjustment to correct color cast issues
 
 ## Performance Benchmarks
 
@@ -290,6 +291,56 @@ All build scripts automatically read `target-dir` configuration from `.cargo/con
 2. Connect to the hotspot and visit `http://192.168.72.1` to access configuration page
 3. Configure WiFi and display parameters, then save
 4. Device will restart and connect to specified WiFi, accessible via LAN
+
+### Web Configuration Interface Features
+
+**Display Settings**:
+- Display model selection (ST7735s, ST7789, ST7796)
+- Resolution configuration (width, height, X/Y offset)
+- Display options (CS pin, color inversion, mirroring, coordinate mode)
+- Rotation direction (0°, 90°, 180°, 270°, supports real-time switching)
+- Color order (RGB/BGR) and SPI mode
+- Preset configurations: Quick selection of common display models
+
+**Network Settings**:
+- WiFi scanning: Automatically scan and display nearby WiFi networks with signal strength
+- WiFi configuration: SSID, password, static IP settings
+- Real-time reconnection: Test new WiFi configuration without restart
+
+**MQTT Remote Server**:
+- MQTT server URL, client ID, username/password
+- Subscription topic and QoS settings
+- Supports real-time reconnection and configuration deletion
+
+**Transfer Speed Test**:
+- HTTP and WebSocket speed testing
+- Selectable data sizes (10KB - 1MB)
+- Real-time display of transfer speed and round-trip time
+
+**Screen Test**:
+- Example page for testing display effects
+
+### Color Adjustment Feature
+
+Some TFT screens may have color cast issues (too blue, too yellow, etc.). Use the "Color Adjustment" feature in the web configuration interface for real-time correction:
+
+![Color Adjustment Interface](images/color_adjust.jpg)
+
+**Features**:
+- **Real-time Effect**: Drag sliders to apply changes immediately to the screen, no restart required
+- **Independent RGB Adjustment**: Adjust Red(R), Green(G), Blue(B) channels separately, range: -100 to +100
+- **Quick Presets**: 4 preset options for common color cast corrections
+  - **Fix Blue Cast**: Reduce blue channel (-30)
+  - **Fix Yellow Cast**: Reduce red and green channels (R:-15, G:-15)
+  - **Warm Tone**: Enhance red, reduce blue (R:+20, G:+10, B:-15)
+  - **Cool Tone**: Reduce red, enhance blue (R:-15, B:+20)
+- **Persistent Settings**: Adjusted values are automatically saved to device and persist after reboot
+
+**How to Use**:
+1. Find the "Color Adjustment" section in the configuration page
+2. Drag R/G/B sliders or click preset buttons
+3. Observe real-time effects on screen (300ms debounce delay)
+4. Settings are automatically saved once adjusted
 
 ## License
 

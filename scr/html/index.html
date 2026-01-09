@@ -151,7 +151,16 @@
     
     <form id="color-adjust-form" autocomplete="off">
         <fieldset>
-            <legend class="doc no-select">色调调整 (实时生效)</legend>
+            <legend class="doc no-select">色调调整 (拖动滑块实时生效)</legend>
+            <div class="row responsive-label">
+                <div class="col-sm-12 col-md-3"><label class="doc">快捷预设:</label></div>
+                <div class="col-sm-12 col-md">
+                    <button class="tertiary" onclick="applyColorPreset('fix-blue')" type="button" style="font-size:0.85em;padding:4px 8px;margin:2px;">修复偏蓝</button>
+                    <button class="tertiary" onclick="applyColorPreset('fix-yellow')" type="button" style="font-size:0.85em;padding:4px 8px;margin:2px;">修复偏黄</button>
+                    <button class="tertiary" onclick="applyColorPreset('warm')" type="button" style="font-size:0.85em;padding:4px 8px;margin:2px;">暖色调</button>
+                    <button class="tertiary" onclick="applyColorPreset('cool')" type="button" style="font-size:0.85em;padding:4px 8px;margin:2px;">冷色调</button>
+                </div>
+            </div>
             <div class="row responsive-label">
                 <div class="col-sm-12 col-md-3">
                     <label for="color-adjust-r" class="doc">红色 (R)</label>
@@ -182,13 +191,12 @@
             <div class="row responsive-label">
                 <div class="col-sm-12 col-md-3"></div>
                 <div class="col-sm-12 col-md">
-                    <small style="color:#666;">💡 调整范围: -100 到 +100，修改后点击"应用"立即生效，屏幕会实时刷新当前显示内容</small>
+                    <small style="color:#666;">💡 调整范围: -100 到 +100。拖动滑块时会自动应用，屏幕会实时刷新显示效果</small>
                 </div>
             </div>
         </fieldset>
-        <div class="button-group">
-            <button class="primary" type="submit">应用色调调整</button>
-            &nbsp;<button class="tertiary" onclick="resetColorAdjust()" type="button">重置为0</button>
+        <div style="text-align: center; padding: 10px;">
+            <button class="tertiary" onclick="resetColorAdjust()" type="button">重置为0</button>
         </div>
     </form>
     <form id="wifi-form" autocomplete="off">
@@ -341,15 +349,19 @@
             submitDisplayConfig();
         });
         
-        colorAdjustForm.addEventListener('submit', function(event) {
-            event.preventDefault();
-            submitColorAdjust();
+        // 色调滑块实时更新显示值和应用
+        $('color-adjust-r').addEventListener('input', function() {
+            updateColorAdjustValues();
+            applyColorAdjustRealtime();
         });
-        
-        // 色调滑块实时更新显示值
-        $('color-adjust-r').addEventListener('input', updateColorAdjustValues);
-        $('color-adjust-g').addEventListener('input', updateColorAdjustValues);
-        $('color-adjust-b').addEventListener('input', updateColorAdjustValues);
+        $('color-adjust-g').addEventListener('input', function() {
+            updateColorAdjustValues();
+            applyColorAdjustRealtime();
+        });
+        $('color-adjust-b').addEventListener('input', function() {
+            updateColorAdjustValues();
+            applyColorAdjustRealtime();
+        });
 
         const checkLoading = $('loading-control');
         const dialog = $('modal-control');
@@ -821,7 +833,7 @@
                 color_inversion.checked = true;
                 check_cs.checked = false;
                 x_offset.value = 0;
-                y_offset.value = 40;  // 居中：(320-240)/2 = 40
+                y_offset.value = 0;
                 spi_mode.selectedIndex = 3;
                 mirrored.checked = false;
                 rotation.selectedIndex = 0;
@@ -1114,30 +1126,93 @@
             $('color-adjust-b-value').textContent = (b > 0 ? '+' : '') + b;
         }
         
-        // 提交色调调整（实时生效，不重启）
-        async function submitColorAdjust() {
+        // 实时应用色调调整（类似屏幕旋转的实时生效）
+        let colorAdjustTimeout = null;
+        let isApplyingColorAdjust = false;
+        async function applyColorAdjustRealtime() {
             const r = parseInt($('color-adjust-r').value);
             const g = parseInt($('color-adjust-g').value);
             const b = parseInt($('color-adjust-b').value);
             
-            showLoading();
-            try{
-                const response = await fetch('/color_adjust', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ r, g, b })
-                });
-                
-                const text = await response.text();
-                if (text != 'OK') {
-                    showDialog('色调调整失败: ' + text);
-                } else {
-                    showDialog('色调调整成功！已立即生效 (R=' + r + ', G=' + g + ', B=' + b + ')');
-                }
-            } catch(e) {
-                showDialog('色调调整失败: ' + e);
+            // 防抖：用户停止拖动滑块300ms后才发送请求
+            if (colorAdjustTimeout) {
+                clearTimeout(colorAdjustTimeout);
             }
-            hideLoading();
+            
+            colorAdjustTimeout = setTimeout(async () => {
+                // 防止并发请求
+                if (isApplyingColorAdjust) {
+                    return;
+                }
+                
+                isApplyingColorAdjust = true;
+                const adjustText = 'R:' + (r > 0 ? '+' : '') + r + ' G:' + (g > 0 ? '+' : '') + g + ' B:' + (b > 0 ? '+' : '') + b;
+                showOverlay('正在应用色调: ' + adjustText);
+                
+                try{
+                    const response = await fetch('/color_adjust', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ r, g, b })
+                    });
+                    
+                    const text = await response.text();
+                    if (text === 'OK') {
+                        console.log('色调已实时应用: R=' + r + ', G=' + g + ', B=' + b);
+                        // 成功后等待500ms让用户看到屏幕上的效果
+                        setTimeout(() => {
+                            hideOverlay();
+                            isApplyingColorAdjust = false;
+                        }, 500);
+                    } else {
+                        hideOverlay();
+                        isApplyingColorAdjust = false;
+                        showDialog('色调调整失败: ' + text);
+                    }
+                } catch(e) {
+                    hideOverlay();
+                    isApplyingColorAdjust = false;
+                    showDialog('色调调整失败: ' + e);
+                }
+            }, 300);
+        }
+        
+        // 应用色调预设
+        function applyColorPreset(preset) {
+            let r = 0, g = 0, b = 0;
+            
+            switch(preset) {
+                case 'fix-blue':
+                    // 修复偏蓝：降低蓝色通道
+                    r = 0;
+                    g = 0;
+                    b = -30;
+                    break;
+                case 'fix-yellow':
+                    // 修复偏黄：降低红色和绿色
+                    r = -15;
+                    g = -15;
+                    b = 0;
+                    break;
+                case 'warm':
+                    // 暖色调：增强红色，降低蓝色
+                    r = 20;
+                    g = 10;
+                    b = -15;
+                    break;
+                case 'cool':
+                    // 冷色调：降低红色，增强蓝色
+                    r = -15;
+                    g = 0;
+                    b = 20;
+                    break;
+            }
+            
+            $('color-adjust-r').value = r;
+            $('color-adjust-g').value = g;
+            $('color-adjust-b').value = b;
+            updateColorAdjustValues();
+            applyColorAdjustRealtime();
         }
         
         // 重置色调调整
@@ -1146,6 +1221,8 @@
             $('color-adjust-g').value = 0;
             $('color-adjust-b').value = 0;
             updateColorAdjustValues();
+            // 立即应用重置后的值到屏幕
+            applyColorAdjustRealtime();
         }
         
         // 实时应用屏幕旋转（无需重启）
