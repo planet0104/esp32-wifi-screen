@@ -114,7 +114,7 @@
             <div class="row responsive-label">
                 <div class="col-sm-12 col-md-3"><label for="disp-rotation" class="doc">方向</label></div>
                 <div class="col-sm-12 col-md">
-                    <select id="disp-rotation" style="width:85%;" class="doc">
+                    <select id="disp-rotation" style="width:85%;" class="doc" onchange="applyRotationRealtime()">
                         <option class="doc">0度</option>
                         <option class="doc">90度</option>
                         <option class="doc">180度</option>
@@ -148,6 +148,49 @@
             &nbsp;<button class="tertiary" onclick="showTestDialog()" type="button">屏幕测试</button>
         </div>
     </form>
+    
+    <form id="color-adjust-form" autocomplete="off">
+        <fieldset>
+            <legend class="doc no-select">色调调整 (实时生效)</legend>
+            <div class="row responsive-label">
+                <div class="col-sm-12 col-md-3">
+                    <label for="color-adjust-r" class="doc">红色 (R)</label>
+                </div>
+                <div class="col-sm-12 col-md">
+                    <input type="range" id="color-adjust-r" min="-100" max="100" value="0" step="1" style="width:70%;" class="doc">
+                    <span id="color-adjust-r-value" style="display:inline-block; width:50px; text-align:right; font-weight:bold; color:#f44336;">0</span>
+                </div>
+            </div>
+            <div class="row responsive-label">
+                <div class="col-sm-12 col-md-3">
+                    <label for="color-adjust-g" class="doc">绿色 (G)</label>
+                </div>
+                <div class="col-sm-12 col-md">
+                    <input type="range" id="color-adjust-g" min="-100" max="100" value="0" step="1" style="width:70%;" class="doc">
+                    <span id="color-adjust-g-value" style="display:inline-block; width:50px; text-align:right; font-weight:bold; color:#4caf50;">0</span>
+                </div>
+            </div>
+            <div class="row responsive-label">
+                <div class="col-sm-12 col-md-3">
+                    <label for="color-adjust-b" class="doc">蓝色 (B)</label>
+                </div>
+                <div class="col-sm-12 col-md">
+                    <input type="range" id="color-adjust-b" min="-100" max="100" value="0" step="1" style="width:70%;" class="doc">
+                    <span id="color-adjust-b-value" style="display:inline-block; width:50px; text-align:right; font-weight:bold; color:#2196f3;">0</span>
+                </div>
+            </div>
+            <div class="row responsive-label">
+                <div class="col-sm-12 col-md-3"></div>
+                <div class="col-sm-12 col-md">
+                    <small style="color:#666;">💡 调整范围: -100 到 +100，修改后点击"应用"立即生效，屏幕会实时刷新当前显示内容</small>
+                </div>
+            </div>
+        </fieldset>
+        <div class="button-group">
+            <button class="primary" type="submit">应用色调调整</button>
+            &nbsp;<button class="tertiary" onclick="resetColorAdjust()" type="button">重置为0</button>
+        </div>
+    </form>
     <form id="wifi-form" autocomplete="off">
         <fieldset>
             <legend class="doc">网络设置</legend>
@@ -178,6 +221,7 @@
         </fieldset>
         <div class="button-group">
             <button class="primary" type="submit">保存网络设置</button>
+            &nbsp;<button class="tertiary" onclick="reconnectWifi()" type="button">实时重连WiFi</button>
         </div>
     </form>
 
@@ -208,6 +252,7 @@
         <div class="button-group">
             <button class="primary" type="submit">保存MQTT设置</button>
             <button class="tertiary" onclick="deleteMqttConfig()" type="button">删除MQTT设置</button>
+            <button class="tertiary" onclick="reconnectMqtt()" type="button">实时重连MQTT</button>
         </div>
     </form>
 
@@ -279,6 +324,7 @@
         var displayConfigForm = $('display-form');
         var wsserverConfigForm = $('wsserver-form');
         var mqttForm = $('mqtt-form');
+        var colorAdjustForm = $('color-adjust-form');
 
         wifiConfigForm.addEventListener('submit', function(event) {
             event.preventDefault();
@@ -294,6 +340,16 @@
             event.preventDefault();
             submitDisplayConfig();
         });
+        
+        colorAdjustForm.addEventListener('submit', function(event) {
+            event.preventDefault();
+            submitColorAdjust();
+        });
+        
+        // 色调滑块实时更新显示值
+        $('color-adjust-r').addEventListener('input', updateColorAdjustValues);
+        $('color-adjust-g').addEventListener('input', updateColorAdjustValues);
+        $('color-adjust-b').addEventListener('input', updateColorAdjustValues);
 
         const checkLoading = $('loading-control');
         const dialog = $('modal-control');
@@ -343,6 +399,38 @@
         }
         function hideLoading(){
             checkLoading.checked = false;
+        }
+        
+        // 统一的全屏遮罩函数
+        let overlayElement = null;
+        function showOverlay(message) {
+            if (!overlayElement) {
+                overlayElement = document.createElement('div');
+                overlayElement.style.cssText = `
+                    position: fixed;
+                    top: 0;
+                    left: 0;
+                    width: 100%;
+                    height: 100%;
+                    background: rgba(0, 0, 0, 0.6);
+                    display: flex;
+                    align-items: center;
+                    justify-content: center;
+                    z-index: 9999;
+                    font-size: 24px;
+                    color: white;
+                    font-weight: bold;
+                `;
+                document.body.appendChild(overlayElement);
+            }
+            overlayElement.textContent = message || '正在处理...';
+            overlayElement.style.display = 'flex';
+        }
+        
+        function hideOverlay() {
+            if (overlayElement) {
+                overlayElement.style.display = 'none';
+            }
         }
 
         function showDialog(msg){
@@ -456,6 +544,20 @@
                 }
             }catch(e){
                 console.log('wifi信息获取失败:', e);
+            }
+            
+            // 读取色调调整配置
+            try{
+                const colorResponse = await fetch('/color_adjust');
+                if(colorResponse.ok){
+                    const colorData = await colorResponse.json();
+                    $('color-adjust-r').value = colorData.r || 0;
+                    $('color-adjust-g').value = colorData.g || 0;
+                    $('color-adjust-b').value = colorData.b || 0;
+                    updateColorAdjustValues();
+                }
+            }catch(e){
+                console.log('色调配置获取失败:', e);
             }
         }
 
@@ -719,7 +821,7 @@
                 color_inversion.checked = true;
                 check_cs.checked = false;
                 x_offset.value = 0;
-                y_offset.value = 0;
+                y_offset.value = 40;  // 居中：(320-240)/2 = 40
                 spi_mode.selectedIndex = 3;
                 mirrored.checked = false;
                 rotation.selectedIndex = 0;
@@ -1000,6 +1102,159 @@
                     speedTestSocket = null;
                 }
             }
+        }
+
+        // 更新色调调整显示值
+        function updateColorAdjustValues() {
+            const r = $('color-adjust-r').value;
+            const g = $('color-adjust-g').value;
+            const b = $('color-adjust-b').value;
+            $('color-adjust-r-value').textContent = (r > 0 ? '+' : '') + r;
+            $('color-adjust-g-value').textContent = (g > 0 ? '+' : '') + g;
+            $('color-adjust-b-value').textContent = (b > 0 ? '+' : '') + b;
+        }
+        
+        // 提交色调调整（实时生效，不重启）
+        async function submitColorAdjust() {
+            const r = parseInt($('color-adjust-r').value);
+            const g = parseInt($('color-adjust-g').value);
+            const b = parseInt($('color-adjust-b').value);
+            
+            showLoading();
+            try{
+                const response = await fetch('/color_adjust', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ r, g, b })
+                });
+                
+                const text = await response.text();
+                if (text != 'OK') {
+                    showDialog('色调调整失败: ' + text);
+                } else {
+                    showDialog('色调调整成功！已立即生效 (R=' + r + ', G=' + g + ', B=' + b + ')');
+                }
+            } catch(e) {
+                showDialog('色调调整失败: ' + e);
+            }
+            hideLoading();
+        }
+        
+        // 重置色调调整
+        function resetColorAdjust() {
+            $('color-adjust-r').value = 0;
+            $('color-adjust-g').value = 0;
+            $('color-adjust-b').value = 0;
+            updateColorAdjustValues();
+        }
+        
+        // 实时应用屏幕旋转（无需重启）
+        async function applyRotationRealtime() {
+            const rotation = $('disp-rotation');
+            const rotationValue = 'Deg' + rotation.value.replace('度', '');
+            
+            showOverlay('正在应用旋转: ' + rotation.value);
+            try {
+                const response = await fetch('/display_rotation', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ rotation: rotationValue })
+                });
+                
+                const text = await response.text();
+                if (text != 'OK') {
+                    hideOverlay();
+                    showDialog('旋转方向更新失败: ' + text);
+                } else {
+                    // 成功后等待500ms让用户看到屏幕上的确认信息
+                    setTimeout(() => {
+                        hideOverlay();
+                    }, 500);
+                }
+            } catch(e) {
+                hideOverlay();
+                showDialog('旋转方向更新失败: ' + e);
+            }
+        }
+        
+        // 实时重连WiFi（部分生效，完整重连可能需要重启）
+        async function reconnectWifi() {
+            const ssid = $('ssid1-text').value;
+            const password = $('ssid1-pwd').value;
+            const deviceIp = $('deviceip-text').value;
+            
+            if (!ssid || ssid.trim() === '') {
+                showDialog('请填写WiFi名称(SSID)');
+                return;
+            }
+            
+            if (!confirm('确定要重新连接WiFi吗？\n\n注意：如果新WiFi连接失败，可能会导致设备无法访问。\n完整的WiFi重连可能需要重启设备才能生效。')) {
+                return;
+            }
+            
+            showLoading();
+            try {
+                const response = await fetch('/wifi_reconnect', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ 
+                        ssid: ssid, 
+                        password: password,
+                        device_ip: deviceIp
+                    })
+                });
+                
+                const text = await response.text();
+                if (text != 'OK') {
+                    showDialog('WiFi重连失败: ' + text);
+                } else {
+                    showDialog('WiFi配置已保存，正在后台重连...\n\n如果设备无法连接新WiFi，请重启设备。');
+                }
+            } catch(e) {
+                showDialog('WiFi重连失败: ' + e);
+            }
+            hideLoading();
+        }
+        
+        // 实时重连MQTT（无需重启）
+        async function reconnectMqtt() {
+            const url = $('mqtt-url-text').value;
+            const clientId = $('mqtt-id-text').value;
+            const username = $('mqtt-username-text').value;
+            const password = $('mqtt-password-text').value;
+            const topic = $('mqtt-topic-text').value;
+            const qos = parseInt($('mqtt-qos').value);
+            
+            if (!url || url.trim() === '') {
+                showDialog('请填写MQTT服务器地址');
+                return;
+            }
+            
+            showLoading();
+            try {
+                const response = await fetch('/mqtt_reconnect', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        url: url,
+                        client_id: clientId,
+                        username: username,
+                        password: password,
+                        topic: topic,
+                        qos: qos
+                    })
+                });
+                
+                const text = await response.text();
+                if (text != 'OK') {
+                    showDialog('MQTT重连失败: ' + text);
+                } else {
+                    showDialog('MQTT配置已保存，正在后台重连...');
+                }
+            } catch(e) {
+                showDialog('MQTT重连失败: ' + e);
+            }
+            hideLoading();
         }
 
         queryWifiConfig();

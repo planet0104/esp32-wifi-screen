@@ -33,7 +33,7 @@ serde = { version = "1", default-features = false, features = ["derive"]}
 non-empty-string = { version = "0.2.5", features = ["serde"] }
 
 static_cell = "2.1.0"
-mipidsi = { git = "https://github.com/planet0104/mipidsi" }
+mipidsi = { path = "./mipidsi" }
 lz4_flex = "0.11.3"
 ab_glyph = { version="0.2.29", default-features = false, features = ["libm"] }
 embedded-graphics = "0.8.1"
