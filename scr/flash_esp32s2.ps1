@@ -1,5 +1,9 @@
 # ESP32-S2 专用烧录脚本
 
+param(
+    [string]$Port = $null
+)
+
 Write-Host "正在为 ESP32-S2 构建和烧录..."
 
 $chip = "esp32s2"
@@ -63,22 +67,27 @@ Write-Host "镜像生成成功!" -ForegroundColor Green
 
 $tool = ".\esptool.exe"
 
-$availablePorts = [System.IO.Ports.SerialPort]::getportnames()
+# 列出并记录可用串口，便于调试
+$availablePorts = [System.IO.Ports.SerialPort]::GetPortNames()
+Write-Host "Detected serial ports: $($availablePorts -join ', ')" -ForegroundColor Cyan
 
-$portsToCheck = @("COM3", "COM10", "COM6", "COM5")
-$selectPort = $portsToCheck[0];
-
-foreach ($port in $portsToCheck) {
-    if ($availablePorts -contains $port) {
-        Write-Host "Port $port Exist" -ForegroundColor Green
-        $selectPort = $port;
-        break
-    } else {
-        Write-Host "Port $port Not Exist." -ForegroundColor Yellow
-    }
+# 选择端口逻辑：优先使用用户提供的 -Port 参数，其次优先使用 COM6，再回退到第一个可用端口
+$selectPort = $null
+if ($Port -and $availablePorts -contains $Port) {
+    Write-Host "Using user-specified port: $Port" -ForegroundColor Green
+    $selectPort = $Port
+} elseif ($availablePorts -contains 'COM6') {
+    Write-Host "Preferring COM6" -ForegroundColor Green
+    $selectPort = 'COM6'
+} elseif ($availablePorts.Count -gt 0) {
+    Write-Host "No COM6 found; using first available port: $($availablePorts[0])" -ForegroundColor Yellow
+    $selectPort = $availablePorts[0]
+} else {
+    Write-Host "No serial ports detected. Please connect device and try again." -ForegroundColor Red
+    exit 1
 }
 
-Write-Host "使用端口: $selectPort" -ForegroundColor Cyan
+Write-Host "Using port: $selectPort" -ForegroundColor Cyan
 Write-Host "烧录完整镜像（包含bootloader、partition和应用）..." -ForegroundColor Cyan
 
 & $tool -p $selectPort --before default_reset --after hard_reset --chip $chip write_flash --flash_mode dio --flash_size 4MB 0x0 $binOutputPath

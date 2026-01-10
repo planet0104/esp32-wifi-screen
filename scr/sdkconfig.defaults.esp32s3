@@ -22,7 +22,11 @@ CONFIG_FREERTOS_HZ=1000
 CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
 
 CONFIG_SPIRAM=y
-CONFIG_SPIRAM_MODE_OCT=y
+# Use malloc() for PSRAM (enable allocation API)
+CONFIG_SPIRAM_USE_MALLOC=y
+# Many ESP32-S3 modules use Quad SPI PSRAM; prefer QUAD mode by default.
+# If your board has Octal PSRAM, change this back to CONFIG_SPIRAM_MODE_OCT=y
+CONFIG_SPIRAM_MODE_QUAD=y
 CONFIG_SPIRAM_SPEED_80M=y
 
 # ESP32-S3 PSRAM size configuration (2MB)
