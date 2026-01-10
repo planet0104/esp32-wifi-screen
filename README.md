@@ -17,9 +17,8 @@
 
  ## 接线方式
 
-ESP32-S2/S3 和屏幕模块的连接方式，参考固件源码中的"[接线](https://github.com/planet0104/esp32-wifi-screen/tree/main/scr/%E6%8E%A5%E7%BA%BF)"目录对应屏幕的接线方式说明文档。
+ESP32-S2/S3 和屏幕模块的连接方式，参考固件源码中的"[README文档](https://github.com/planet0104/esp32-wifi-screen/tree/main/scr/README.md)"。
 
-![alt text](./images/connect.jpg)
 
 # 烧录固件
 
