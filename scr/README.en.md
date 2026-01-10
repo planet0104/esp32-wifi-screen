@@ -192,7 +192,13 @@ BL  -> VBUS
    ```toml
    [env]
    MCU="esp32s2"
-   ESP_IDF_VERSION = "v5.3.2"
+   ESP_IDF_VERSION = "v5.3.4"
+
+Note: This project pins ESP-IDF to v5.3.4. Use the provided build scripts
+(`build_esp32s2.ps1` / `build_esp32s3.ps1`) which set `ESP_IDF_VERSION` and
+`ESP_IDF_SDKCONFIG_DEFAULTS`. If you encounter multiple ESP-IDF versions,
+run `scripts\clean-embuild.ps1 -Force` to remove cached copies before
+rebuilding.
    ESP_IDF_SDKCONFIG_DEFAULTS = { value = "sdkconfig.defaults", relative = true }
    ```
 
@@ -235,12 +241,12 @@ BL  -> VBUS
 
 ### Method 2: Using ESP-IDF Official Installer
 
-1. **Download and install ESP-IDF 5.3**
+1. **Download and install ESP-IDF 5.3.4**
    - Official site: https://dl.espressif.com/dl/esp-idf/index.html
    - Optionally install Rust related components
 
 2. **Use ESP-IDF console**
-   - Open ESP-IDF 5.3 CMD console
+   - Open ESP-IDF 5.3.4 CMD console
    - Navigate to project directory and build
 
 ## Common Commands

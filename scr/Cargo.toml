@@ -53,3 +53,9 @@ tjpgdec-rs = { version = "0.4.0", default-features = false, features = ["fast-de
 
 [build-dependencies]
 embuild = "0.33"
+
+[package.metadata."esp-idf-sys"]
+# Force embuild / esp-idf-sys to use workspace installation and specific ESP-IDF version
+esp_idf_tools_install_dir = "workspace"
+esp_idf_version = "v5.3.4"
+esp_idf_sdkconfig_defaults = ["sdkconfig.defaults.esp32s2", "sdkconfig.defaults.esp32s3"]

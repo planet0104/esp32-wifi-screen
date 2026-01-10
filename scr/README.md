@@ -59,44 +59,44 @@
 ```
 GND -> GND
 VCC -> 3V3
-SCL -> GPIO6
-SDA -> GPIO7
-RST -> GPIO8
-DC  -> GPIO5
-CS  -> GPIO4
-BLK -> (悬空或VBUS)
-```
+   
+   # 安装 esp Rust 工具链
+   ```powershell
+   espup install
+   ```
+   注意：如果安装过程卡住超过5分钟，按 Ctrl+C 中断即可，工具链已经安装成功。
 
-#### ST7735S 128x160（带CS）
+4. **配置项目**
+   
+   a) **设置超短路径编译目录**（**必需**，解决ESP-IDF路径过长错误）
+   
+   编辑 `.cargo/config.toml`：
+   ```toml
+   [build]
+   target = "xtensa-esp32s2-espidf"
+   target-dir = "C:/t"  # 使用超短路径，ESP-IDF 要求总路径不超过特定长度
+   ```
+   
+   创建目录：
+   ```powershell
+   New-Item -ItemType Directory -Path "C:/t" -Force
+   ```
 
-![ST7735S 128x160](images/ST7735S_128x160_CS.png)
+   b) **配置 sdkconfig 路径**
 
-```
-GND -> GND
-VCC -> 3V3
-SCL -> GPIO6
-SDA -> GPIO7
-RST -> GPIO8
-DC  -> GPIO5
-CS  -> GPIO4
-BL  -> (悬空或VBUS)
-```
+   在 `.cargo/config.toml` 的 `[env]` 部分添加：
+   ```toml
+   [env]
+   MCU="esp32s2"
+   ESP_IDF_VERSION = "v5.3.4"
 
-#### ST7789 240x240（无CS）
-
-![ST7789 240x240](images/ST7789_240x240.png)
-
-```
-GND -> GND
-VCC -> 3V3
-SCL -> GPIO6
-SDA -> GPIO7
-RES -> GPIO8
-DC  -> GPIO5
-BLK -> (悬空或VBUS)
-```
-
-#### ST7789 240x320（带CS）
+Note: This project pins ESP-IDF to v5.3.4. Use the provided build scripts
+(`build_esp32s2.ps1` / `build_esp32s3.ps1`) which set `ESP_IDF_VERSION` and
+`ESP_IDF_SDKCONFIG_DEFAULTS`. If you encounter multiple ESP-IDF versions,
+run `scripts\clean-embuild.ps1 -Force` to remove cached copies before
+rebuilding.
+   ESP_IDF_SDKCONFIG_DEFAULTS = { value = "sdkconfig.defaults", relative = true }
+   ```
 
 ![ST7789 240x320](images/ST7789_240x320_CS.png)
 
@@ -192,7 +192,13 @@ BL  -> VBUS
    ```toml
    [env]
    MCU="esp32s2"
-   ESP_IDF_VERSION = "v5.3.2"
+   ESP_IDF_VERSION = "v5.3.4"
+
+Note: This project pins ESP-IDF to v5.3.4. Use the provided build scripts
+(`build_esp32s2.ps1` / `build_esp32s3.ps1`) which set `ESP_IDF_VERSION` and
+`ESP_IDF_SDKCONFIG_DEFAULTS`. If you encounter multiple ESP-IDF versions,
+run `scripts\clean-embuild.ps1 -Force` to remove cached copies before
+rebuilding.
    ESP_IDF_SDKCONFIG_DEFAULTS = { value = "sdkconfig.defaults", relative = true }
    ```
 
@@ -235,12 +241,12 @@ BL  -> VBUS
 
 ### 方式二：使用 ESP-IDF 官方安装器
 
-1. **下载并安装 ESP-IDF 5.3**
+1. **下载并安装 ESP-IDF 5.3.4**
    - 官网：https://dl.espressif.com.cn/dl/esp-idf/index.html
    - 可选择安装 Rust 相关组件
 
 2. **使用 ESP-IDF 控制台**
-   - 打开 ESP-IDF 5.3 CMD 控制台
+   - 打开 ESP-IDF 5.3.4 CMD 控制台
    - 进入项目目录执行编译
 
 ## 常用命令
