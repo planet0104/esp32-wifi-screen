@@ -1,5 +1,6 @@
 # Name,   Type, SubType, Offset,  Size, Flags
 # Note: if you have increased the bootloader size, make sure to update the offsets to avoid overlap
+# Optimized for 4MB Flash with 2MB PSRAM (ESP32-S2/S3)
 nvs,      data, nvs,     ,        0x6000,
 phy_init, data, phy,     ,        0x1000,
-factory,  app,  factory, ,        3M,
+factory,  app,  factory, ,        0x3C0000,

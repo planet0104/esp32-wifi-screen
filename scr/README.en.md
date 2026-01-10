@@ -1,6 +1,6 @@
 # ESP32 WiFi Screen
 
-An ESP32-S2 based WiFi display project that supports remote control of TFT displays via HTTP/WebSocket/MQTT.
+An ESP32-S2/S3 based WiFi display project that supports remote control of TFT displays via HTTP/WebSocket/MQTT.
 
 [中文](README.md)
 
@@ -32,7 +32,7 @@ An ESP32-S2 based WiFi display project that supports remote control of TFT displ
 
 ## Hardware Requirements
 
-- ESP32-S2 development board (with PSRAM)
+- ESP32-S2 or ESP32-S3 development board (4MB Flash + 2MB PSRAM required)
 - Supported TFT display (see wiring instructions below)
 
 ## Wiring Instructions

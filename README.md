@@ -1,7 +1,7 @@
 # esp32-wifi-screen
- ESP32 S2 wifi screen
+ ESP32-S2/S3 WiFi Screen
  
- 基于ESP32 S2开发的一个WiFi屏幕，固件提供HTTP接口、Websocket接口，以及Mqtt客户端三种方式控制屏幕显示内容。目前支持的屏幕型号有：ST7735S、ST7789/ST7789V、ST7796。测试过的屏幕包括：ST7735S 80x160、ST7735S 128x160、ST7789 240x240、ST7789 240x320、ST7789V 135x240、ST7796 320x480。
+ 基于 ESP32-S2/S3 开发的 WiFi 屏幕，固件提供 HTTP 接口、WebSocket 接口，以及 MQTT 客户端三种方式控制屏幕显示内容。目前支持的屏幕型号有：ST7735S、ST7789/ST7789V、ST7796。测试过的屏幕包括：ST7735S 80x160、ST7735S 128x160、ST7789 240x240、ST7789 240x320、ST7789V 135x240、ST7796 320x480。
 
  ![alt text](./images/screen0.jpg)
 
@@ -11,31 +11,40 @@
 
  ![alt text](./images/screen3.jpg)
 
- ## ESP32 S2开发板
+ ## ESP32-S2/S3 开发板
 
- ESP32 S2开发板必须是4M Flash，带2M PSRAM的版本。否则无法运行此固件。
+ ESP32-S2 或 ESP32-S3 开发板必须是 4MB Flash + 2MB PSRAM 的版本，否则无法运行此固件。两款芯片均已完全支持。
 
  ## 接线方式
 
-ESP32 S2和屏幕模块的连接方式，参考在固件源码中的“[接线](https://github.com/planet0104/esp32-wifi-screen/tree/main/scr/%E6%8E%A5%E7%BA%BF)”目录对应屏幕的接线方式说明文档。
+ESP32-S2/S3 和屏幕模块的连接方式，参考固件源码中的"[接线](https://github.com/planet0104/esp32-wifi-screen/tree/main/scr/%E6%8E%A5%E7%BA%BF)"目录对应屏幕的接线方式说明文档。
 
 ![alt text](./images/connect.jpg)
 
 # 烧录固件
 
-## ESP32 S2切换到烧录模式
-按住 Boot 按钮并启动 ESP32-S2 开发板，芯片会进入 烧录模式。设备管理器出现ESP32串口。
+## 切换到烧录模式
+按住 Boot 按钮并启动 ESP32-S2/S3 开发板，芯片会进入烧录模式。设备管理器会出现 ESP32 串口。
 ![alt text](./images/esp32s2boot.jpg)
 
-## 使用esptool烧录
+## 使用 esptool 烧录
+
+### ESP32-S2
 ```powershell
-.\esptool.exe -p COM6 --before default_reset --after hard_reset --chip esp32s2 write_flash 0x1000 .\bootloader.bin 0x8000 .\partitions.bin 0x10000 esp32-wifi-screen.bin
+.\esptool.exe -p COM6 --before default_reset --after hard_reset --chip esp32s2 write_flash 0x0 esp32-wifi-screen-esp32s2-merged.bin
 ```
+
+### ESP32-S3
+```powershell
+.\esptool.exe -p COM6 --before default_reset --after hard_reset --chip esp32s3 write_flash 0x0 esp32-wifi-screen-esp32s3-merged.bin
+```
+
+> **说明**: 现在使用完整镜像文件（merged binary），直接从 0x0 地址烧录，无需分别烧录 bootloader、partition table 和 app。
 
 # 配置WiFi屏幕
 
-## 连接ESP32-WiFiScreen
-固件烧录成功后，重新启动ESP32 S2，在电脑(或手机)上连接热点"ESP32-WiFiScreen"
+## 连接 ESP32-WiFiScreen
+固件烧录成功后，重新启动 ESP32-S2/S3，在电脑（或手机）上连接热点 "ESP32-WiFiScreen"
 
 ![alt text](./images/setup0.jpg)
 
