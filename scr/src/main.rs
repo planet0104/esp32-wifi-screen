@@ -9,7 +9,7 @@ use config::Config;
 use display::{DisplayManager, DisplayPins};
 use embedded_svc::wifi::{AccessPointConfiguration, AuthMethod, Configuration};
 
-use esp_idf_hal::{io::EspIOError, sys::{esp_restart, esp_wifi_set_ps, wifi_ps_type_t_WIFI_PS_NONE, ESP_FAIL}};
+use esp_idf_hal::{io::EspIOError, sys::{esp_restart, esp_wifi_set_ps, wifi_ps_type_t_WIFI_PS_NONE, wifi_ps_type_t_WIFI_PS_MIN_MODEM, ESP_FAIL}};
 use esp_idf_svc::{ipv4::{Mask, Subnet}, wifi::{BlockingWifi, ClientConfiguration, EspWifi, WifiDriver}};
 use esp_idf_svc::netif::{EspNetif, NetifConfiguration, NetifStack};
 use esp_idf_svc::{eventloop::EspSystemEventLoop, nvs::EspDefaultNvsPartition};
@@ -311,7 +311,13 @@ fn start_wifi() -> anyhow::Result<()> {
                 .set_configuration(&Configuration::AccessPoint(ap_config))?;
         }
 
-        // Disable WiFi power save for maximum throughput and minimum latency
+        // Set WiFi power save policy:
+        // - On ESP32-S3 prefer MIN_MODEM to reduce power draw on constrained power supplies
+        // - On other chips keep NONE for maximum throughput
+        #[cfg(feature = "esp32s3")]
+        unsafe { esp_wifi_set_ps(wifi_ps_type_t_WIFI_PS_MIN_MODEM) };
+
+        #[cfg(not(feature = "esp32s3"))]
         unsafe { esp_wifi_set_ps(wifi_ps_type_t_WIFI_PS_NONE) };
 
         if let Err(err) = ctx.wifi.start(){

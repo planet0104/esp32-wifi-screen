@@ -96,11 +96,11 @@ CONFIG_HTTPD_PURGE_BUF_LEN=64
 
 #---------- WiFi Buffer Configuration (High Performance) ----------------
 # Static RX buffer: Higher = better throughput, uses more DRAM
-CONFIG_ESP_WIFI_STATIC_RX_BUFFER_NUM=16
-# Dynamic RX buffer: Higher = better throughput
-CONFIG_ESP_WIFI_DYNAMIC_RX_BUFFER_NUM=64
-# Dynamic TX buffer
-CONFIG_ESP_WIFI_DYNAMIC_TX_BUFFER_NUM=64
+CONFIG_ESP_WIFI_STATIC_RX_BUFFER_NUM=8
+# Dynamic RX buffer: lowered to reduce DRAM/PSRAM transient usage
+CONFIG_ESP_WIFI_DYNAMIC_RX_BUFFER_NUM=32
+# Dynamic TX buffer (reduced)
+CONFIG_ESP_WIFI_DYNAMIC_TX_BUFFER_NUM=32
 
 #---------- AMPDU (Block Acknowledgment) - Critical for speed ----------------
 # Enable AMPDU for higher throughput
@@ -146,7 +146,7 @@ CONFIG_LWIP_TCP_KEEPALIVE=y
 
 #---------- ESP32-S3 Specific Performance Optimization ----------------
 # ESP32-S3 supports higher WiFi TX power (max 20.5dBm)
-CONFIG_ESP_PHY_MAX_WIFI_TX_POWER=20
+CONFIG_ESP_PHY_MAX_WIFI_TX_POWER=12
 
 # Enable WiFi NVS flash - faster WiFi connection
 CONFIG_ESP_WIFI_NVS_ENABLED=y
