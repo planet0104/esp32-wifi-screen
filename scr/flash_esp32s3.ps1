@@ -81,10 +81,12 @@ foreach ($port in $portsToCheck) {
 Write-Host "使用端口: $selectPort" -ForegroundColor Cyan
 Write-Host "烧录完整镜像（包含bootloader、partition和应用）..." -ForegroundColor Cyan
 
-& $tool -p $selectPort --before default_reset --after hard_reset --chip $chip write_flash --flash_mode dio --flash_size detect 0x0 $binOutputPath
+& $tool -p $selectPort --before default_reset --after hard_reset --chip $chip write_flash --flash_mode dio --flash_size 4MB 0x0 $binOutputPath
 
 if ($LASTEXITCODE -eq 0) {
     Write-Host "烧录完成!" -ForegroundColor Green
+    Write-Host "正在启动串口监视器..." -ForegroundColor Cyan
+    & ".\monitor.ps1" -p $selectPort
 } else {
     Write-Host "烧录失败!" -ForegroundColor Red
     exit 1
