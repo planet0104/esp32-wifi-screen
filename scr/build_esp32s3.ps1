@@ -87,7 +87,7 @@ if (Test-Path $preferredBoot) { $firstBootPath = $preferredBoot }
 if ($firstBootPath) {
     $buildBootDir = Join-Path $projectRoot 'build\bootloader'
     if (-not (Test-Path $buildBootDir)) { New-Item -ItemType Directory -Path $buildBootDir | Out-Null }
-    $usedBootPath = Join-Path $buildBootDir 'bootloader.bin'
+    $usedBootPath = Join-Path $buildBootDir ("bootloader-{0}.bin" -f $chip)
     Copy-Item -Path $firstBootPath -Destination $usedBootPath -Force
     $firstBootPath = $usedBootPath
 }
@@ -103,25 +103,45 @@ $magic = @()
 try { $magic = [System.IO.File]::ReadAllBytes($binaryPath)[0..3] } catch { $magic = @() }
 if ($magic -and ($magic -join ' ' ) -eq "127 69 76 70") {
     Write-Host "Detected ELF executable at $binaryPath; searching for generated .bin under $targetDir..." -ForegroundColor Yellow
-    # Prefer .bin under the specific target's release/debug folders, exclude incremental and dep-graph
+    # Improved selection: prefer project/app .bin, exclude dep-graph, bootloader, libespidf and incremental build artifacts
     $filtered = @()
     $targetReleasePath = Join-Path $targetDir "$target\release"
     $targetDebugPath = Join-Path $targetDir "$target\debug"
     $preferPaths = @($targetReleasePath, $targetDebugPath) | Where-Object { Test-Path $_ }
     foreach ($p in $preferPaths) {
-        $filtered += Get-ChildItem -Path $p -Recurse -Filter '*.bin' -ErrorAction SilentlyContinue | Where-Object { $_.Name -ne 'dep-graph.bin' -and $_.FullName -notlike '*incremental*' -and $_.Name -notlike 'bootloader.bin' -and $_.Length -gt 32768 }
+        $filtered += Get-ChildItem -Path $p -Recurse -Filter '*.bin' -ErrorAction SilentlyContinue | Where-Object {
+            $_.Name -ne 'dep-graph.bin' -and
+            $_.Name -ne 'bootloader.bin' -and
+            $_.Name -ne 'libespidf.bin' -and
+            $_.FullName -notlike '*incremental*' -and
+            $_.FullName -notlike '*build\esp-idf-sys*' -and
+            $_.Length -gt 32768
+        }
     }
     if (-not $filtered -or $filtered.Count -eq 0) {
-        $filtered = Get-ChildItem -Path $targetDir -Recurse -Filter '*.bin' -ErrorAction SilentlyContinue | Where-Object { $_.Name -ne 'dep-graph.bin' -and $_.FullName -notlike '*incremental*' -and $_.Name -notlike 'bootloader.bin' -and $_.Length -gt 32768 }
+        $filtered = Get-ChildItem -Path $targetDir -Recurse -Filter '*.bin' -ErrorAction SilentlyContinue | Where-Object {
+            $_.Name -ne 'dep-graph.bin' -and
+            $_.Name -ne 'bootloader.bin' -and
+            $_.Name -ne 'libespidf.bin' -and
+            $_.FullName -notlike '*incremental*' -and
+            $_.FullName -notlike '*build\esp-idf-sys*' -and
+            $_.Length -gt 32768
+        }
     }
     if ($filtered -and $filtered.Count -gt 0) {
         $projBase = [System.IO.Path]::GetFileNameWithoutExtension($binaryPath)
-        $preferredNameMatches = $filtered | Where-Object { ($_.Name -match $projBase) -or ($_.Name -match '(?i)app|factory') }
+        # Prefer files that match project base name or common app names
+        $preferredNameMatches = $filtered | Where-Object { $_.Name -match $projBase -or ($_.Name -match '(?i)app|factory') }
+
         if ($preferredNameMatches -and $preferredNameMatches.Count -gt 0) {
             $best = $preferredNameMatches | Sort-Object Length -Descending | Select-Object -First 1
         } else {
             $releasePref = $filtered | Where-Object { $_.FullName -match '\\release\\' }
-            if ($releasePref -and $releasePref.Count -gt 0) { $best = $releasePref | Sort-Object Length -Descending | Select-Object -First 1 } else { $best = $filtered | Sort-Object Length -Descending | Select-Object -First 1 }
+            if ($releasePref -and $releasePref.Count -gt 0) {
+                $best = $releasePref | Sort-Object Length -Descending | Select-Object -First 1
+            } else {
+                $best = $filtered | Sort-Object Length -Descending | Select-Object -First 1
+            }
         }
         Write-Host "Found candidate app bin: $($best.FullName) (size $($best.Length) bytes)" -ForegroundColor Cyan
         $binaryPath = $best.FullName
@@ -153,8 +173,19 @@ $stdOut = $proc.StandardOutput.ReadToEnd()
 $stdErr = $proc.StandardError.ReadToEnd()
 $proc.WaitForExit()
 
-if ($firstBootPath) { Write-Host "Using bootloader: $firstBootPath" -ForegroundColor Cyan }
-else { Write-Host "No local bootloader file was chosen (espflash may use embuild cache)." -ForegroundColor Yellow }
+if ($firstBootPath) {
+    Write-Host "Using bootloader: $firstBootPath" -ForegroundColor Cyan
+    try {
+        if (Test-Path $firstBootPath) {
+            $bootMd5 = (Get-FileHash $firstBootPath -Algorithm MD5).Hash
+            Write-Host ("Bootloader MD5: {0}" -f $bootMd5) -ForegroundColor Cyan
+        } else {
+            Write-Host "Bootloader path does not exist to compute MD5." -ForegroundColor Yellow
+        }
+    } catch {
+        Write-Host ("Warning: failed to compute bootloader MD5: {0}" -f $_) -ForegroundColor Yellow
+    }
+} else { Write-Host "No local bootloader file was chosen (espflash may use embuild cache)." -ForegroundColor Yellow }
 
 Write-Host "--- espflash stdout ---" -ForegroundColor DarkCyan
 Write-Host $stdOut
@@ -169,10 +200,40 @@ if ($proc.ExitCode -eq 0) {
     if (Test-Path (Join-Path $PSScriptRoot 'esptool.exe')) { $esptoolCmd = Join-Path $PSScriptRoot 'esptool.exe' }
     elseif (Get-Command esptool -ErrorAction SilentlyContinue) { $esptoolCmd = 'esptool' }
     if ($esptoolCmd) {
-        Write-Host "Running image validation: $esptoolCmd image_info $binOutputPath" -ForegroundColor DarkCyan
+        # Create temp slice if merged image has leading 0xFF and contains ESP magic 0xE9
+        $tempSlice = $null
+        try {
+            $bytes = [System.IO.File]::ReadAllBytes($binOutputPath)
+            if ($bytes.Length -gt 0 -and $bytes[0] -eq 0xFF) {
+                $foundOffset = $null
+                $maxSearch = [Math]::Min($bytes.Length, 4 * 1024 * 1024)
+                for ($i = 0; $i -lt $maxSearch; $i++) {
+                    if ($bytes[$i] -eq 0xE9) { $foundOffset = $i; break }
+                }
+                if ($foundOffset -ne $null) {
+                    Write-Host ('Detected ESP image magic at offset 0x{0:X} (decimal {1}). Extracting slice to temp file for esptool validation.' -f $foundOffset,$foundOffset) -ForegroundColor Cyan
+                    $tempSlice = Join-Path $PSScriptRoot ('temp_image_offset_{0:X}.bin' -f $foundOffset)
+                    try {
+                        $outStream = [System.IO.File]::OpenWrite($tempSlice)
+                        $outStream.Write($bytes,$foundOffset,$bytes.Length - $foundOffset)
+                        $outStream.Close()
+                    } catch {
+                        Write-Host ('Warning: failed to write temporary slice file: {0}' -f $_) -ForegroundColor Yellow
+                        $tempSlice = $null
+                    }
+                } else {
+                    Write-Host "No ESP image magic (0xE9) found within first 4MB; running image_info on full merged image." -ForegroundColor Yellow
+                }
+            }
+        } catch {
+            Write-Host ('Warning: failed to inspect merged image for magic bytes: {0}' -f $_) -ForegroundColor Yellow
+        }
+
+        $imgArgs = if ($tempSlice) { "image_info $tempSlice" } else { "image_info $binOutputPath" }
+        Write-Host ('Running image validation: {0} {1}' -f $esptoolCmd,$imgArgs) -ForegroundColor DarkCyan
         $imgInfoProc = New-Object System.Diagnostics.ProcessStartInfo
         $imgInfoProc.FileName = $esptoolCmd
-        $imgInfoProc.Arguments = "image_info $binOutputPath"
+        $imgInfoProc.Arguments = $imgArgs
         $imgInfoProc.RedirectStandardOutput = $true
         $imgInfoProc.RedirectStandardError = $true
         $imgInfoProc.UseShellExecute = $false
@@ -186,12 +247,24 @@ if ($proc.ExitCode -eq 0) {
             Write-Host "esptool stdout:" -ForegroundColor DarkCyan
             Write-Host $imgOut
             if ($imgErr) { Write-Host "esptool stderr:" -ForegroundColor DarkCyan; Write-Host $imgErr }
+            if ($tempSlice) { Remove-Item $tempSlice -ErrorAction SilentlyContinue }
             exit $imgProc.ExitCode
         } else {
             Write-Host $imgOut
+            if ($tempSlice) { Remove-Item $tempSlice -ErrorAction SilentlyContinue }
         }
     }
     Write-Host "Using bootloader: $firstBootPath" -ForegroundColor Cyan
+    try {
+        if (Test-Path $firstBootPath) {
+            $bootMd5 = (Get-FileHash $firstBootPath -Algorithm MD5).Hash
+            Write-Host ("Bootloader MD5: {0}" -f $bootMd5) -ForegroundColor Cyan
+        } else {
+            Write-Host "Bootloader path does not exist to compute MD5." -ForegroundColor Yellow
+        }
+    } catch {
+        Write-Host ("Warning: failed to compute bootloader MD5: {0}" -f $_) -ForegroundColor Yellow
+    }
     Write-Host "Partitions CSV: $partitionsCsv" -ForegroundColor Cyan
     Write-Host "Merged image: $binOutputPath" -ForegroundColor Cyan
     Write-Host "ESP32-S3 image generated successfully: $binOutputPath" -ForegroundColor Green
