@@ -86,6 +86,23 @@ pub enum DisplayInterface {
     ),
 }
 
+impl DisplayInterface {
+    pub fn write_raw_command(&mut self, instruction: u8, params: &[u8]) -> Result<(), anyhow::Error> {
+        match self {
+            DisplayInterface::ST7735s(d) => {
+                // forward to mipidsi Display write_raw_command
+                d.write_raw_command(instruction, params).map_err(|e| anyhow!("write_raw_command failed: {:?}", e))
+            }
+            DisplayInterface::ST7789(d) => {
+                d.write_raw_command(instruction, params).map_err(|e| anyhow!("write_raw_command failed: {:?}", e))
+            }
+            DisplayInterface::ST7796(d) => {
+                d.write_raw_command(instruction, params).map_err(|e| anyhow!("write_raw_command failed: {:?}", e))
+            }
+        }
+    }
+}
+
 pub struct DisplayPins {
     pub spi2: SPI2,
     pub cs: Gpio4,

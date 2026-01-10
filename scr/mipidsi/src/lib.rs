@@ -283,6 +283,12 @@ where
         M::ColorFormat::send_pixels_buffer(&mut self.di, pixels)
     }
 
+    /// Send a raw instruction with parameters to the display interface.
+    /// This forwards the instruction to the underlying interface (DCS/raw command).
+    pub fn write_raw_command(&mut self, instruction: u8, params: &[u8]) -> Result<(), DI::Error> {
+        self.di.send_command(instruction, params)
+    }
+
     /// Fast pixel drawing using pre-formatted u16 buffer (ZERO-COPY, FASTEST for RGB565)
     ///
     /// This is the absolute fastest method for RGB565 displays on platforms
