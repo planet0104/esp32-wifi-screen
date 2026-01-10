@@ -88,19 +88,18 @@ CONFIG_HTTPD_MAX_URI_LEN=1024
 CONFIG_HTTPD_ERR_RESP_NO_DELAY=y
 
 # Increase purge buffer for faster data handling
-CONFIG_HTTPD_PURGE_BUF_LEN=64
+CONFIG_HTTPD_PURGE_BUF_LEN=256
 
 #=================================
 # WiFi Performance Optimization for Maximum Speed
 # https://docs.espressif.com/projects/esp-idf/zh_CN/latest/esp32s3/api-guides/performance/speed.html
 
 #---------- WiFi Buffer Configuration (High Performance) ----------------
-# Static RX buffer: Higher = better throughput, uses more DRAM
-CONFIG_ESP_WIFI_STATIC_RX_BUFFER_NUM=8
-# Dynamic RX buffer: lowered to reduce DRAM/PSRAM transient usage
-CONFIG_ESP_WIFI_DYNAMIC_RX_BUFFER_NUM=32
-# Dynamic TX buffer (reduced)
-CONFIG_ESP_WIFI_DYNAMIC_TX_BUFFER_NUM=32
+CONFIG_ESP_WIFI_STATIC_RX_BUFFER_NUM=32
+# Dynamic RX buffer: match esp32s2 for higher throughput
+CONFIG_ESP_WIFI_DYNAMIC_RX_BUFFER_NUM=64
+# Dynamic TX buffer: match esp32s2 for higher throughput
+CONFIG_ESP_WIFI_DYNAMIC_TX_BUFFER_NUM=64
 
 #---------- AMPDU (Block Acknowledgment) - Critical for speed ----------------
 # Enable AMPDU for higher throughput
@@ -213,7 +212,7 @@ CONFIG_HTTPD_MAX_URI_LEN=2048
 CONFIG_LWIP_MEM_SIZE=131072
 
 # Increase PBUF pool size
-CONFIG_LWIP_PBUF_POOL_SIZE=64
+CONFIG_LWIP_PBUF_POOL_SIZE=128
 
 # Enable PSRAM as primary storage for WiFi buffers
 CONFIG_ESP_WIFI_RX_BA_WIN=64

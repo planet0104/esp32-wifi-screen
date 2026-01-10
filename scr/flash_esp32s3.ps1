@@ -82,6 +82,38 @@ if ($esptoolCmd) {
 
 Write-Host "Merged image: $binOutputPath" -ForegroundColor Cyan
 
+# Helper: parse partition table inside merged image at 0x8000 to find offset/size for a label
+function Get-PartitionOffsetSize {
+    param(
+        [string]$imagePath,
+        [string]$label
+    )
+    try {
+        $fs = [System.IO.File]::OpenRead($imagePath)
+        $fs.Position = 0x8000
+        $buf = New-Object byte[] 4096
+        $read = $fs.Read($buf,0,$buf.Length)
+        $fs.Close()
+    } catch {
+        return $null
+    }
+    for ($i=0; $i -lt $read-16; $i++) {
+        if ($buf[$i] -eq 0xAA -and $buf[$i+1] -eq 0x50) {
+            $entryOffset = [BitConverter]::ToUInt32($buf,$i+4)
+            $entrySize = [BitConverter]::ToUInt32($buf,$i+8)
+            # read label bytes until null
+            $j = $i + 12
+            $lblBytes = @()
+            while ($j -lt $read -and $buf[$j] -ne 0) { $lblBytes += $buf[$j]; $j++ }
+            $lbl = ([System.Text.Encoding]::ASCII).GetString($lblBytes)
+            if ($lbl -and ($lbl -ieq $label -or $lbl -imatch $label)) {
+                return @{ offset = ('0x{0:X}' -f $entryOffset); size = ('0x{0:X}' -f $entrySize) }
+            }
+        }
+    }
+    return $null
+}
+
 # 列出并记录可用串口，便于调试
 $availablePorts = [System.IO.Ports.SerialPort]::GetPortNames()
 Write-Host "Detected serial ports: $($availablePorts -join ', ')" -ForegroundColor Cyan
@@ -121,9 +153,12 @@ if (Test-Path $partitionsCsv) {
             $psize = $cols[4].Trim()
             foreach ($pat in $preserveNames) {
                 if ($pname -imatch $pat) {
+                    if ((-not $poffset) -or ($poffset -eq '')) {
+                        $resolved = Get-PartitionOffsetSize -imagePath $binOutputPath -label $pname
+                        if ($resolved) { $poffset = $resolved.offset; $psize = $resolved.size }
+                    }
                     $backupFile = Join-Path $PSScriptRoot ("preserve_{0}.bin" -f $pname)
                     Write-Host ("Backing up partition '{0}' offset {1} size {2} -> {3}" -f $pname,$poffset,$psize,$backupFile) -ForegroundColor Yellow
-                    $readArgs = @($tool, '-p', $selectPort, '--before', 'default_reset', '--after', 'hard_reset', '--chip', $chip, 'read_flash', $poffset, $psize, $backupFile)
                     $procInfo = New-Object System.Diagnostics.ProcessStartInfo
                     $procInfo.FileName = $tool
                     $procInfo.Arguments = ('-p {0} --before default_reset --after hard_reset --chip {1} read_flash {2} {3} {4}' -f $selectPort,$chip,$poffset,$psize,$backupFile)
@@ -161,10 +196,15 @@ if ($LASTEXITCODE -ne 0) {
 
 # 恢复备份的分区
 foreach ($b in $preserveBackups) {
-    Write-Host ("Restoring partition '{0}' from {1} to offset {2}..." -f $b.name,$b.file,$b.offset) -ForegroundColor Yellow
+    $roffset = $b.offset
+    if (-not $roffset -or $roffset -eq '') {
+        $resolved = Get-PartitionOffsetSize -imagePath $binOutputPath -label $b.name
+        if ($resolved) { $roffset = $resolved.offset }
+    }
+    Write-Host ("Restoring partition '{0}' from {1} to offset {2}..." -f $b.name,$b.file,$roffset) -ForegroundColor Yellow
     $procInfo = New-Object System.Diagnostics.ProcessStartInfo
     $procInfo.FileName = $tool
-    $procInfo.Arguments = ('-p {0} --before default_reset --after hard_reset --chip {1} write_flash {2} {3}' -f $selectPort,$chip,$b.offset,$b.file)
+    $procInfo.Arguments = ('-p {0} --before default_reset --after hard_reset --chip {1} write_flash {2} {3}' -f $selectPort,$chip,$roffset,$b.file)
     $procInfo.RedirectStandardOutput = $true
     $procInfo.RedirectStandardError = $true
     $procInfo.UseShellExecute = $false

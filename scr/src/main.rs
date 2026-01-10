@@ -320,23 +320,29 @@ fn start_wifi() -> anyhow::Result<()> {
         #[cfg(not(feature = "esp32s3"))]
         unsafe { esp_wifi_set_ps(wifi_ps_type_t_WIFI_PS_NONE) };
 
-        if let Err(err) = ctx.wifi.start(){
-            error!("wifi start: {err:?}");
-            let _ = draw_splash_with_error(ctx, Some("热点启动失败"), None);
-            return Ok(());
+        info!("About to start WiFi interface (ctx.wifi.start())...");
+        match ctx.wifi.start() {
+            Ok(_) => info!("ctx.wifi.start() returned Ok"),
+            Err(err) => {
+                error!("wifi start: {err:?}");
+                let _ = draw_splash_with_error(ctx, Some("热点启动失败"), None);
+                return Ok(());
+            }
         }
 
+        info!("Calling ctx.wifi.connect() to attach to STA network (if configured)...");
         let mut err2 = match ctx.wifi.connect(){
-            Ok(_) => None,
+            Ok(_) => { info!("ctx.wifi.connect() returned Ok"); None },
             Err(err) => {
                 error!("wifi connect: {err:?}");
                 Some("Wifi连接失败".to_string())
             }
         };
 
-        if let Err(err) = ctx.wifi.wait_netif_up(){
+        info!("Calling ctx.wifi.wait_netif_up() to wait for network interface up...");
+        if let Err(err) = ctx.wifi.wait_netif_up() {
             error!("wait_netif_up: {err:?}");
-        }else{
+        } else {
             //保存设备ip以及网关ip
             if let Some(cfg) = ctx.config.wifi_config.as_mut() {
                 let mut need_reboot = false;

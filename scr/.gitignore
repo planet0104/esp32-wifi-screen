@@ -4,5 +4,4 @@
 /Cargo.lock
 /.history
 /*.bin
-!bootloader.bin
-!partitions.bin
+*.bin
