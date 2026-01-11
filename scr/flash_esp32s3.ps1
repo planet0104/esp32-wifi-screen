@@ -187,7 +187,8 @@ if (Test-Path $partitionsCsv) {
 }
 
 Write-Host "Flashing merged image (bootloader, partition and app) to 0x0..." -ForegroundColor Cyan
-& $tool -p $selectPort --before default_reset --after hard_reset --chip $chip write_flash --flash_mode dio --flash_size 4MB 0x0 $binOutputPath
+# Disable esptool compression to avoid "Failed to write compressed data to flash" stub errors on some setups
+& $tool -p $selectPort --before default_reset --after hard_reset --chip $chip write_flash --no-compress --flash_mode dio --flash_size 4MB 0x0 $binOutputPath
 
 if ($LASTEXITCODE -ne 0) {
     Write-Host "Flashing failed!" -ForegroundColor Red

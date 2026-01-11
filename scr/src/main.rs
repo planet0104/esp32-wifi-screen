@@ -1,5 +1,6 @@
 use core::convert::TryInto;
 use std::{collections::HashMap, net::Ipv4Addr, num::NonZero, sync::Mutex, time::{Duration, Instant}};
+ 
 
 use anyhow::{anyhow, Result};
 use canvas::{
@@ -23,12 +24,14 @@ use esp_idf_svc::{
 use http_server::print_memory;
 use image::{RgbImage, RgbaImage};
 use log::*;
+use std::io::Write;
 use once_cell::sync::Lazy;
 use serde::Serialize;
 mod utils;
 mod canvas;
 mod config;
 mod display;
+mod usb_reader;
 #[allow(unused)]
 mod imageproc;
 mod mqtt_client;
@@ -242,6 +245,8 @@ fn main() -> anyhow::Result<()> {
     info!("Display initialization completed");
     info!("========================================");
 
+    // USB serial descriptor is configured via sdkconfig (fixed serial string)
+
     //启动wifi热点
     info!("Starting WiFi...");
     if let Err(err) = start_wifi() {
@@ -274,6 +279,34 @@ fn main() -> anyhow::Result<()> {
         info!("MQTT client started successfully");
     }
     info!("=== Initialization Complete ===");
+    // Start USB stdin reader now that initialization and display are complete
+    // Create a channel so usb_stdin_reader can send text responses to main thread for reliable stdout flush
+    let (usb_tx, usb_rx) = std::sync::mpsc::channel::<String>();
+    // spawn a thread in main to consume responses and emit them via logger (info!)
+    std::thread::spawn(move || {
+        // Consume responses from usb reader thread and write them to stdout
+        // so the host-side client receives them directly over the CDC channel.
+        let mut out = std::io::stdout();
+        for line in usb_rx.iter() {
+            // messages already include trailing newline when sent from reader
+            // Write to stdout but avoid flushing each line to reduce contention
+            // with the esp logger which may share the same CDC channel.
+            let _ = out.write_all(line.as_bytes());
+            // also mirror into the log for device-side diagnostics
+            let l = line.trim_end().to_string();
+            // Avoid sending protocol reply lines back through the esp logger
+            // because the esp logger writes to the same CDC channel and would
+            // duplicate output (and can block). Only log non-protocol diagnostics.
+            if l.starts_with("ERROR:") {
+                log::error!("{}", &l[6..]);
+            } else if l.starts_with("SPEED") || l.starts_with("FRAME_") || l.starts_with("DRAW") || l.starts_with("DECOMPRESSED") || l.starts_with("FRAME_START") || l.starts_with("FRAME_END") || l.starts_with("BUSY") || l.starts_with("SPEEDCANCELLED") || l.starts_with("SPEEDTIMEOUT") {
+                // these are protocol messages already written to stdout; don't duplicate
+            } else {
+                log::info!("{}", l);
+            }
+        }
+    });
+    usb_reader::start_with_sender(Some(usb_tx));
     Ok(())
 }
 

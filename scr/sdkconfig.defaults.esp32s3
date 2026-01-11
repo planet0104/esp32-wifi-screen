@@ -118,6 +118,10 @@ CONFIG_LWIP_TCP_RECVMBOX_SIZE=64
 CONFIG_LWIP_UDP_RECVMBOX_SIZE=64
 CONFIG_LWIP_TCPIP_RECVMBOX_SIZE=64
 
+# Set a fixed TinyUSB serial string so host tools can discover the device
+# If your ESP-IDF/TinyUSB Kconfig symbol differs, adjust accordingly in menuconfig.
+CONFIG_TINYUSB_DESC_SERIAL="ESP32SCR"
+
 #---------- WiFi IRAM Optimization (Enable for Speed) ----------------
 # Place WiFi library functions in IRAM for faster execution
 CONFIG_ESP_WIFI_IRAM_OPT=y
