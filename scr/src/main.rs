@@ -282,6 +282,23 @@ fn main() -> anyhow::Result<()> {
     // Start USB stdin reader now that initialization and display are complete
     // Create a channel so usb_stdin_reader can send text responses to main thread for reliable stdout flush
     let (usb_tx, usb_rx) = std::sync::mpsc::channel::<String>();
+
+    // If building for ESP32-S3, install the USB Serial JTAG driver with asymmetric buffers
+    #[cfg(feature = "esp32s3")]
+    {
+        use esp_idf_sys as sys;
+        use core::ffi::c_void;
+        let mut cfg = sys::usb_serial_jtag_driver_config_t {
+            tx_buffer_size: 256,
+            rx_buffer_size: 8192,
+        };
+        unsafe {
+            // install driver (ignore error if already installed)
+            let _ = sys::esp!(sys::usb_serial_jtag_driver_install(&mut cfg as *mut _));
+            let startup_msg = b"READY:HIGH_SPEED_RX\n";
+            let _ = sys::usb_serial_jtag_write_bytes(startup_msg.as_ptr() as *const c_void, startup_msg.len(), 100);
+        }
+    }
     // spawn a thread in main to consume responses and emit them via logger (info!)
     std::thread::spawn(move || {
         // Consume responses from usb reader thread and write them to stdout

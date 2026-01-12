@@ -371,11 +371,8 @@ pub fn draw_rgb565_fast(
     
     // 如果没有色调调整，直接绘制
     if adj_r == 0 && adj_g == 0 && adj_b == 0 {
-        let (end_x, end_y) = if display_manager.display_config.inclusive_end_coords{
-            (x + width - 1, y + height - 1)
-        }else{
-            (x + width, y + height)
-        };
+        // Always use inclusive end coordinates for address window (avoid off-by-one stride)
+        let (end_x, end_y) = (x + width - 1, y + height - 1);
         match &mut display_manager.display {
             DisplayInterface::ST7735s(display) => {
                 display.set_pixels_buffer_u16(x, y, end_x, end_y, pixels.as_ref())
@@ -401,11 +398,8 @@ pub fn draw_rgb565_fast(
         adjusted_pixels.push(rgb888_to_rgb565(r, g, b).to_be());
     }
     
-    let (end_x, end_y) = if display_manager.display_config.inclusive_end_coords{
-        (x + width - 1, y + height - 1)
-    }else{
-        (x + width, y + height)
-    };
+    // Always use inclusive end coordinates for address window (avoid off-by-one stride)
+    let (end_x, end_y) = (x + width - 1, y + height - 1);
     match &mut display_manager.display {
         DisplayInterface::ST7735s(display) => {
             display.set_pixels_buffer_u16(x, y, end_x, end_y, &adjusted_pixels)
