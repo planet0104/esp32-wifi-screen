@@ -1,4 +1,4 @@
-# ESP32-S3 专用构建脚本
+# ESP32-S3 Build Script
 
 Write-Host "Building project for ESP32-S3..." -ForegroundColor Green
 
@@ -6,12 +6,12 @@ $chip = "esp32s3"
 $target = "xtensa-esp32s3-espidf"
 $feature = "esp32s3"
 
-# 设置环境变量 - 使用绝对路径
+# Set environment variables with absolute paths
 $env:MCU = "esp32s3"
 $projectRoot = $PSScriptRoot
 $env:ESP_IDF_VERSION = "v5.3.4"
 
-# 读取target目录配置 (需要在构建前获取)
+# Read target directory from config (before build)
 $configContent = Get-Content ".cargo\config.toml" -Raw -ErrorAction SilentlyContinue
 if ($configContent -match 'target-dir\s*=\s*"([^"]+)"') {
     $targetDir = $matches[1].Replace('/', '\')
@@ -22,11 +22,11 @@ if ($configContent -match 'target-dir\s*=\s*"([^"]+)"') {
     $targetDir = Join-Path $projectRoot "target"
 }
 
-# 生成临时 sdkconfig 文件，将 partitions.csv 路径替换为绝对路径
+# Generate temporary sdkconfig with absolute partition path
 $srcSdkconfig = Join-Path $projectRoot "sdkconfig.defaults.esp32s3"
 $tempSdkconfig = Join-Path $projectRoot "sdkconfig.defaults.esp32s3.tmp"
 $srcPartitions = Join-Path $projectRoot "partitions.csv"
-# 使用正斜杠格式的绝对路径（CMake/ESP-IDF 兼容）
+# Use forward slash format (CMake/ESP-IDF compatible)
 $absPartitionsPath = $srcPartitions.Replace('\', '/')
 
 Write-Host "Generating temporary sdkconfig with absolute partition path..." -ForegroundColor Cyan
@@ -42,10 +42,10 @@ Write-Host "  MCU: $env:MCU"
 Write-Host "  ESP_IDF_SDKCONFIG_DEFAULTS: $env:ESP_IDF_SDKCONFIG_DEFAULTS"
 Write-Host "  ESP_IDF_VERSION: $env:ESP_IDF_VERSION"
 
-# 使用 --target 和 --features 参数构建
+# Build with --target and --features
 cargo build --release --target $target --no-default-features --features "$feature,experimental"
 
-# 清理临时文件
+# Clean up temporary file
 if (Test-Path $tempSdkconfig) {
     Remove-Item $tempSdkconfig -Force
 }
@@ -58,9 +58,10 @@ if ($LASTEXITCODE -ne 0) {
 Write-Host "ESP32-S3 compilation successful!" -ForegroundColor Green
 
 $binaryPath = "$targetDir\$target\release\esp32-wifi-screen"
-$binOutputPath = "esp32-wifi-screen-$chip-merged.bin"
+# Output merged bin to project root directory
+$binOutputPath = Join-Path $projectRoot "esp32-wifi-screen-$chip-merged.bin"
 
-# 打印 partitions.csv 与 bootloader.bin 的绝对路径，便于排查
+# Print absolute paths for partitions.csv and bootloader.bin for debugging
 $partitionsCsv = Join-Path $projectRoot 'partitions.csv'
 if (Test-Path $partitionsCsv) {
     Write-Host "Partitions CSV: $partitionsCsv" -ForegroundColor Cyan
@@ -111,13 +112,14 @@ if ($firstBootPath) {
     $firstBootPath = $usedBootPath
 }
 
-# 检查应用二进制是否存在
+# Check if application binary exists
 if (-not (Test-Path $binaryPath)) {
     Write-Host "Error: application binary not found at: $binaryPath" -ForegroundColor Red
     Write-Host "Ensure the target build produced the binary and rerun the script." -ForegroundColor Yellow
     exit 1
 }
-# 如果二进制是 ELF（静态可执行），尝试在 target 目录里查找生成的 .bin（esp-idf/embuild 输出）
+
+# If binary is ELF, try to find generated .bin under target directory (esp-idf/embuild output)
 $magic = @()
 try { $magic = [System.IO.File]::ReadAllBytes($binaryPath)[0..3] } catch { $magic = @() }
 if ($magic -and ($magic -join ' ' ) -eq "127 69 76 70") {
@@ -175,9 +177,10 @@ if ($binSize -lt 32768) {
     exit 1
 }
 
-# 生成完整合并镜像（包含bootloader、partition和应用）
+# Generate merged image (including bootloader, partition and application)
 Write-Host "Generating merged image: $binOutputPath" -ForegroundColor Cyan
-$espflashArgs = @("save-image", "--chip", $chip, "--merge", "--partition-table", "partitions.csv", $binaryPath, $binOutputPath)
+# Use absolute path for partitions.csv
+$espflashArgs = @("save-image", "--chip", $chip, "--merge", "--partition-table", "`"$partitionsCsv`"", $binaryPath, $binOutputPath)
 Write-Host "Running: espflash $($espflashArgs -join ' ')" -ForegroundColor DarkCyan
 $procInfo = New-Object System.Diagnostics.ProcessStartInfo
 $procInfo.FileName = "espflash"
@@ -214,7 +217,7 @@ if ($stdErr) {
 }
 
 if ($proc.ExitCode -eq 0) {
-    # 可选：如果本地有 esptool.exe 或系统路径中存在 esptool，则用 image_info 验证 merged.bin
+    # Optional: if local esptool.exe or esptool exists in system path, validate merged.bin with image_info
     $esptoolCmd = $null
     if (Test-Path (Join-Path $PSScriptRoot 'esptool.exe')) { $esptoolCmd = Join-Path $PSScriptRoot 'esptool.exe' }
     elseif (Get-Command esptool -ErrorAction SilentlyContinue) { $esptoolCmd = 'esptool' }

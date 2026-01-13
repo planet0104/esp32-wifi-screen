@@ -1,4 +1,4 @@
-# ESP32-S2 专用构建脚本
+# ESP32-S2 Build Script
 
 Write-Host "Building project for ESP32-S2..." -ForegroundColor Green
 
@@ -6,18 +6,44 @@ $chip = "esp32s2"
 $target = "xtensa-esp32s2-espidf"
 $feature = "esp32s2"
 
-# 设置环境变量 - 使用绝对路径
+# Set environment variables with absolute paths
 $env:MCU = "esp32s2"
 $projectRoot = $PSScriptRoot
 $env:ESP_IDF_SDKCONFIG_DEFAULTS = "$projectRoot\sdkconfig.defaults.esp32s2"
 $env:ESP_IDF_VERSION = "v5.3.4"
+
+# Read target directory from config (before build)
+$configContent = Get-Content ".cargo\config.toml" -Raw -ErrorAction SilentlyContinue
+if ($configContent -match 'target-dir\s*=\s*"([^"]+)"') {
+    $targetDir = $matches[1].Replace('/', '\')
+    if (-not [System.IO.Path]::IsPathRooted($targetDir)) {
+        $targetDir = Join-Path $projectRoot $targetDir
+    }
+} else {
+    $targetDir = Join-Path $projectRoot "target"
+}
+
+# Generate temporary sdkconfig with absolute partition path
+$srcSdkconfig = Join-Path $projectRoot "sdkconfig.defaults.esp32s2"
+$tempSdkconfig = Join-Path $projectRoot "sdkconfig.defaults.esp32s2.tmp"
+$srcPartitions = Join-Path $projectRoot "partitions.csv"
+# Use forward slash format (CMake/ESP-IDF compatible)
+$absPartitionsPath = $srcPartitions.Replace('\', '/')
+
+Write-Host "Generating temporary sdkconfig with absolute partition path..." -ForegroundColor Cyan
+$sdkconfigContent = Get-Content $srcSdkconfig -Raw
+$sdkconfigContent = $sdkconfigContent -replace 'CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="[^"]*"', "CONFIG_PARTITION_TABLE_CUSTOM_FILENAME=`"$absPartitionsPath`""
+Set-Content -Path $tempSdkconfig -Value $sdkconfigContent -NoNewline
+Write-Host "  Partition path: $absPartitionsPath" -ForegroundColor DarkCyan
+
+$env:ESP_IDF_SDKCONFIG_DEFAULTS = $tempSdkconfig
 
 Write-Host "Environment variables:" -ForegroundColor Cyan
 Write-Host "  MCU: $env:MCU"
 Write-Host "  ESP_IDF_SDKCONFIG_DEFAULTS: $env:ESP_IDF_SDKCONFIG_DEFAULTS"
 Write-Host "  ESP_IDF_VERSION: $env:ESP_IDF_VERSION"
 
-# 使用 --target 和 --features 参数构建
+# Build with --target and --features
 cargo build --release --target $target --no-default-features --features "$feature,experimental"
 
 if ($LASTEXITCODE -ne 0) {
@@ -27,10 +53,10 @@ if ($LASTEXITCODE -ne 0) {
 
 Write-Host "ESP32-S2 compilation successful!" -ForegroundColor Green
 
-# 读取target目录配置
+# Re-read target directory config (use same format as ESP32-S3)
 $configContent = Get-Content ".cargo\config.toml" -Raw
 if ($configContent -match 'target-dir\s*=\s*"([^"]+)"') {
-    $targetDir = $matches[1].Replace('/', '\\')
+    $targetDir = $matches[1].Replace('/', '\')
     if (-not [System.IO.Path]::IsPathRooted($targetDir)) {
         $targetDir = Join-Path $projectRoot $targetDir
     }
@@ -38,10 +64,11 @@ if ($configContent -match 'target-dir\s*=\s*"([^"]+)"') {
     $targetDir = Join-Path $projectRoot "target"
 }
 
-$binaryPath = "$targetDir\\$target\\release\\esp32-wifi-screen"
-$binOutputPath = "esp32-wifi-screen-$chip-merged.bin"
+$binaryPath = "$targetDir\$target\release\esp32-wifi-screen"
+# Output merged bin to project root directory
+$binOutputPath = Join-Path $projectRoot "esp32-wifi-screen-$chip-merged.bin"
 
-# 打印 partitions.csv 与 bootloader.bin 的绝对路径，便于排查
+# Print absolute paths for partitions.csv and bootloader.bin for debugging
 $partitionsCsv = Join-Path $projectRoot 'partitions.csv'
 if (Test-Path $partitionsCsv) {
     Write-Host "Partitions CSV: $partitionsCsv" -ForegroundColor Cyan
@@ -81,43 +108,43 @@ if (-not (Test-Path $partitionsCsv)) {
     Write-Host "Partitions CSV not found: $partitionsCsv" -ForegroundColor Red
 }
 
-# 检查应用二进制是否存在
+# Check if application binary exists
 if (-not (Test-Path $binaryPath)) {
     Write-Host "Error: application binary not found at: $binaryPath" -ForegroundColor Red
     Write-Host "Ensure the target build produced the binary and rerun the script." -ForegroundColor Yellow
     exit 1
 }
 
-# 如果二进制是 ELF（静态可执行），尝试在 target 目录里查找生成的 .bin（esp-idf/embuild 输出）
+# If binary is ELF, try to find generated .bin under target directory (esp-idf/embuild output)
 $magic = @()
 try { $magic = [System.IO.File]::ReadAllBytes($binaryPath)[0..3] } catch { $magic = @() }
 if ($magic -and ($magic -join ' ' ) -eq "127 69 76 70") {
     Write-Host "Detected ELF executable at $binaryPath; searching for generated .bin under $targetDir..." -ForegroundColor Yellow
     
-    # 改进的搜索逻辑：优先查找正确的应用程序 bin 文件
+    # Improved search logic: prefer correct application bin file
     $filtered = @()
     $targetReleasePath = Join-Path $targetDir "$target\release"
     
-    # 首先尝试查找 esp32-wifi-screen.bin（项目名称的 bin）
+    # First try to find esp32-wifi-screen.bin (project name bin)
     $projectBinPath = Join-Path $targetReleasePath "esp32-wifi-screen.bin"
     if (Test-Path $projectBinPath) {
         Write-Host "Found project binary: $projectBinPath" -ForegroundColor Green
         $binaryPath = $projectBinPath
     } else {
-        # 如果找不到，搜索符合条件的 bin 文件，但排除 libespidf.bin
+        # If not found, search for bin files matching criteria, excluding libespidf.bin
         if (Test-Path $targetReleasePath) {
             $filtered = Get-ChildItem -Path $targetReleasePath -Recurse -Filter '*.bin' -ErrorAction SilentlyContinue | Where-Object { 
                 $_.Name -ne 'dep-graph.bin' -and 
                 $_.Name -ne 'bootloader.bin' -and 
-                $_.Name -ne 'libespidf.bin' -and  # 排除 ESP-IDF 库文件
+                $_.Name -ne 'libespidf.bin' -and  # Exclude ESP-IDF library file
                 $_.FullName -notlike '*incremental*' -and 
-                $_.FullName -notlike '*build\esp-idf-sys*' -and  # 排除 esp-idf-sys 构建产物
+                $_.FullName -notlike '*build\esp-idf-sys*' -and  # Exclude esp-idf-sys build artifacts
                 $_.Length -gt 32768 
             }
         }
         
         if (-not $filtered -or $filtered.Count -eq 0) {
-            # 如果还是找不到，扩大搜索范围但保持排除规则
+            # If still not found, expand search scope but keep exclusion rules
             $filtered = Get-ChildItem -Path $targetDir -Recurse -Filter '*.bin' -ErrorAction SilentlyContinue | Where-Object { 
                 $_.Name -ne 'dep-graph.bin' -and 
                 $_.Name -ne 'bootloader.bin' -and 
@@ -130,13 +157,13 @@ if ($magic -and ($magic -join ' ' ) -eq "127 69 76 70") {
         
         if ($filtered -and $filtered.Count -gt 0) {
             $projBase = [System.IO.Path]::GetFileNameWithoutExtension($binaryPath)
-            # 优先匹配项目名称
+            # Prefer matching project name
             $preferredNameMatches = $filtered | Where-Object { $_.Name -match $projBase }
             
             if ($preferredNameMatches -and $preferredNameMatches.Count -gt 0) {
                 $best = $preferredNameMatches | Sort-Object Length -Descending | Select-Object -First 1
             } else {
-                # 否则选择最大的 bin 文件
+                # Otherwise select largest bin file
                 $best = $filtered | Sort-Object Length -Descending | Select-Object -First 1
             }
             
@@ -156,9 +183,10 @@ if ($binSize -lt 32768) {
 
 Write-Host "Using application binary: $binaryPath (size: $binSize bytes)" -ForegroundColor Green
 
-# 生成完整合并镜像
+# Generate merged image (including bootloader, partition and application)
 Write-Host "Generating merged image: $binOutputPath" -ForegroundColor Cyan
-$espflashArgs = @("save-image", "--chip", $chip, "--merge", "--partition-table", "partitions.csv", $binaryPath, $binOutputPath)
+# Use absolute path for partitions.csv
+$espflashArgs = @("save-image", "--chip", $chip, "--merge", "--partition-table", "`"$partitionsCsv`"", $binaryPath, $binOutputPath)
 Write-Host "Running: espflash $($espflashArgs -join ' ')" -ForegroundColor DarkCyan
 $procInfo = New-Object System.Diagnostics.ProcessStartInfo
 $procInfo.FileName = "espflash"

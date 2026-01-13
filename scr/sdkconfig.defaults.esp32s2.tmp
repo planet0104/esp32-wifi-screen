@@ -3,7 +3,7 @@ CONFIG_ESP_MAIN_TASK_STACK_SIZE=8000
 
 # Use custom partition table (relative to project root)
 CONFIG_PARTITION_TABLE_CUSTOM=y
-CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="C:/Users/glsa-/Documents/GitHub/esp32-wifi-screen/scr/partitions.csv"
 
 # Flash size configuration (4MB)
 CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y

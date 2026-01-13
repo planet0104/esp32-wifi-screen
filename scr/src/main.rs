@@ -299,8 +299,23 @@ fn main() -> anyhow::Result<()> {
             let _ = sys::usb_serial_jtag_write_bytes(startup_msg.as_ptr() as *const c_void, startup_msg.len(), 100);
         }
     }
+    
+    // ESP32-S2 uses TinyUSB CDC, console is automatically redirected to USB CDC
+    // Just print a ready message to stdout
+    #[cfg(feature = "esp32s2")]
+    {
+        info!("[USB-S2] TinyUSB CDC ready");
+        // Give USB CDC time to enumerate on host
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        println!("READY:USB-CDC");
+        let _ = std::io::stdout().flush();
+    }
     // spawn a thread in main to consume responses and emit them via logger (info!)
-    std::thread::spawn(move || {
+    // Use small stack size (8KB) to save memory on ESP32-S2
+    let _ = std::thread::Builder::new()
+        .name("usb_resp".to_string())
+        .stack_size(8 * 1024)
+        .spawn(move || {
         // Consume responses from usb reader thread and write them to stdout
         // so the host-side client receives them directly over the CDC channel.
         let mut out = std::io::stdout();
@@ -309,14 +324,26 @@ fn main() -> anyhow::Result<()> {
             // Write to stdout but avoid flushing each line to reduce contention
             // with the esp logger which may share the same CDC channel.
             let _ = out.write_all(line.as_bytes());
-            // also mirror into the log for device-side diagnostics
+            
+            // For critical protocol responses (device info, speed results), 
+            // flush immediately to ensure host receives them
             let l = line.trim_end().to_string();
+            if l.starts_with("ESP32-WIFI-SCREEN") || l.starts_with("SPEEDRESULT") || 
+               l.starts_with("BOOTED") || l.starts_with("READY") {
+                let _ = out.flush();
+            }
+            
+            // also mirror into the log for device-side diagnostics
             // Avoid sending protocol reply lines back through the esp logger
             // because the esp logger writes to the same CDC channel and would
             // duplicate output (and can block). Only log non-protocol diagnostics.
             if l.starts_with("ERROR:") {
                 log::error!("{}", &l[6..]);
-            } else if l.starts_with("SPEED") || l.starts_with("FRAME_") || l.starts_with("DRAW") || l.starts_with("DECOMPRESSED") || l.starts_with("FRAME_START") || l.starts_with("FRAME_END") || l.starts_with("BUSY") || l.starts_with("SPEEDCANCELLED") || l.starts_with("SPEEDTIMEOUT") {
+            } else if l.starts_with("SPEED") || l.starts_with("FRAME_") || l.starts_with("DRAW") || 
+                      l.starts_with("DECOMPRESSED") || l.starts_with("FRAME_START") || 
+                      l.starts_with("FRAME_END") || l.starts_with("BUSY") || 
+                      l.starts_with("SPEEDCANCELLED") || l.starts_with("SPEEDTIMEOUT") ||
+                      l.starts_with("ESP32-WIFI-SCREEN") || l.starts_with("BOOTED") {
                 // these are protocol messages already written to stdout; don't duplicate
             } else {
                 log::info!("{}", l);
