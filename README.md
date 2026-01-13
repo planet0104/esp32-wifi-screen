@@ -294,51 +294,80 @@ BL  -> VBUS
 
 ## WiFi-Screen-Client（屏幕镜像客户端）
 
-仓库内置一个客户端，通过系统截屏方式将屏幕镜像输出到 WiFi 屏幕：
+一个客户端，通过系统截屏方式将屏幕镜像输出到 WiFi 屏幕上。建议先安装 [Virtual Display Driver](https://github.com/VirtualDisplay/Virtual-Display-Driver)，并添加一个大小、比例合适的虚拟显示器。
 
 - 客户端目录：`tools/wifi-screen-client/`
-- 建议配合安装 Virtual Display Driver 创建虚拟显示器，便于将窗口完整移动到虚拟屏幕进行截屏推流
 
-Virtual Display Driver：
-- 项目主页：`https://github.com/VirtualDisplay/Virtual-Display-Driver`
-- 推荐版本（与原文档一致）：[24.12.24 release](https://github.com/VirtualDisplay/Virtual-Display-Driver/releases/tag/24.12.24)
-- 安装包示例：[Virtual.Display.Driver-v24.12.24-setup-x64.exe](https://github.com/VirtualDisplay/Virtual-Display-Driver/releases/download/24.12.24/Virtual.Display.Driver-v24.12.24-setup-x64.exe)
+### 安装 Virtual Display Driver
 
-参考流程（截图在 `images/`）：
-- 安装驱动：`images/vdd0.jpg` 到 `images/vdd6.jpg`
-- 调整虚拟屏幕分辨率与刷新配置：`images/vdd7.jpg` 到 `images/vdd12.jpg`
-- 连接客户端并开始镜像：`images/client0.jpg`、`images/client.jpg`
+1. 打开 Virtual Display Driver 的 GitHub 下载页：https://github.com/VirtualDisplay/Virtual-Display-Driver/releases/tag/24.12.24
 
-### 使用上位机连接 WiFi 显示器
+2. 下载最新版本的安装包 [Virtual.Display.Driver-v24.12.24-setup-x64.exe](https://github.com/VirtualDisplay/Virtual-Display-Driver/releases/download/24.12.24/Virtual.Display.Driver-v24.12.24-setup-x64.exe)
 
-#### 1. 获取 WiFi 屏幕的局域网 IP
+![vdd0](images/vdd0.jpg)
 
-设备完成 WiFi 配置后，在配置界面可以看到局域网 IP，之后用该 IP 访问配置界面与上位机客户端。
+3. 运行安装程序，按照默认步骤安装
 
-#### 2. 使用 WiFi-Screen-Client 连接
+![vdd1](images/vdd1.jpg)
 
-1. 启动 `tools/wifi-screen-client/` 的客户端程序
-2. 连接方式选择 `WiFi (IP)`
-3. 选择显示器
-   - 建议选择 Virtual Display Driver 创建的虚拟显示器，分辨率按你的屏幕比例设置
-4. 在“WiFi屏幕IP”输入设备 IP
-5. 点击“测试”
-   - 客户端会请求 `http://{ip}/display_config` 与 `http://{ip}/draw_image`，用于验证设备在线与接口可用
-6. 测试成功后，设置“传输格式”和“截屏延迟”，点击“启动”
-   - 启动后会使用 `ws://{ip}/ws` 建立 WebSocket 连接并持续推送截屏数据
+![vdd2](images/vdd2.jpg)
 
-#### 3. 参数建议
+![vdd3](images/vdd3.jpg)
 
-- 截屏延迟
-  - 值越小刷新越快，但占用 CPU 和网络更高
-  - 屏幕分辨率越大建议延迟越大，避免卡顿
-- 传输格式
+![vdd4](images/vdd4.jpg)
+
+![vdd5](images/vdd5.jpg)
+
+4. 安装完成后，启动 Virtual Display Driver 托盘程序
+
+![vdd6](images/vdd6.jpg)
+
+5. 右键点击 Virtual Display Driver 托盘图标，点击 "Loaded from vdd_settings.xml" 菜单项
+
+![vdd7](images/vdd7.jpg)
+
+6. 在打开的浏览器界面中复制完整的 vdd_settings.xml，并在文本编辑器中打开它
+
+![vdd8](images/vdd8.jpg)
+
+7. 删掉多余的屏幕配置，只留下需要的。例如屏幕是 ST7789 240x240，可以将分辨率设置成相同比例的 480x480。分辨率太小的话，应用窗口可能无法移动过去或完全显示
+
+![vdd9](images/vdd9.jpg)
+
+8. 再次点击 Virtual Display Driver 托盘图标，点击 "Reload Settings" 菜单项刷新虚拟屏幕配置。如果无效可多点击几次，稍等片刻
+
+![vdd10](images/vdd10.jpg)
+
+9. 打开系统屏幕设置，可看到一个虚拟的小显示器。确认选择的分辨率是正确的。如果修改的分辨率配置没有生效，尝试点击托盘菜单的 "Reload Driver" 或 "Disable Driver"，重新启动虚拟显示器驱动。然后在系统屏幕设置中移动小屏位置并点击应用，屏幕就会刷新到修改后的分辨率
+
+![vdd11](images/vdd11.jpg)
+
+![vdd12](images/vdd12.jpg)
+
+### 连接 WiFi 显示器
+
+输入 WiFi 显示器的 IP 地址，测试通过后点击"启动"按钮即可。
+
+屏幕分辨率越大，屏幕刷新速度越慢，要适当增加延迟时间(ms)。
+
+![client0](images/client0.jpg)
+
+![client](images/client.jpg)
+
+连接成功后，虚拟显示器的屏幕内容就会显示到 WiFi 屏幕上。
+
+### 参数建议
+
+- **截屏延迟**：值越小刷新越快，但占用 CPU 和网络更高；屏幕分辨率越大建议延迟越大，避免卡顿
+- **传输格式**：
   - `RGB565` 延迟低但带宽占用更高
   - `JPG xx%` 带宽更省但编码耗时更高，适合 WiFi 环境较差时
 
-#### 4. 连接 WiFi 显示器（原文档提示）
+## USB Screen 客户端
 
-输入 WiFi 显示器的 IP 地址，测试通过后点击“启动”即可。
+[USB屏幕&编辑器](https://github.com/planet0104/USB-Screen) 也适配了 WiFi 屏幕，配置好 IP 地址即可连接。
+
+![editor1](images/editor1.jpg)
 
 ## 其他语言示例
 
