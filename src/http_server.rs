@@ -1545,95 +1545,101 @@ fn handle_color_adjust(
     Ok(())
 }
 
+/// HTTP请求处理函数：设置屏幕背光亮度
+///
+/// 处理POST /brightness请求，接收JSON格式的亮度值，控制GPIO13 PWM输出
+/// 同时更新配置并保存到NVS闪存中
+///
+/// # 请求格式
+/// ```json
+/// {
+///     "brightness": 75
+/// }
+/// ```
+///
+/// # 处理流程
+/// 1. 解析HTTP请求体中的JSON数据
+/// 2. 验证亮度值范围（0-100）
+/// 3. 更新全局配置对象
+/// 4. 同步更新DisplayManager中的配置
+/// 5. 调用display::set_brightness()设置GPIO13 PWM占空比
+/// 6. 将新配置保存到NVS（持久化存储）
+/// 7. 在屏幕上显示提示信息
+/// 8. 返回HTTP响应
+///
+/// # 错误处理
+/// - 亮度值超过100：返回错误
+/// - 显示屏未配置：返回错误
+/// - PWM设置失败：记录警告但不返回错误（配置已保存）
+///
+/// # NVS持久化
+/// 亮度值会保存到NVS的"cfg.json"键中，格式为：
+/// ```json
+/// {
+///     "display_config": {
+///         "brightness": 75
+///     }
+/// }
+/// ```
+///
 fn handle_brightness(
     ctx: &mut Context,
     req: &mut esp_idf_svc::http::server::Request<&mut EspHttpConnection<'_>>,
 ) -> Result<()> {
+    // 定义请求数据结构，用于反序列化JSON
     #[derive(serde::Deserialize)]
     struct BrightnessReq {
-        brightness: u8,
+        brightness: u8,  // 亮度值（0-100%）
     }
 
+    // 读取HTTP请求体（最大128字节）
     let mut buf = Box::new(vec![0u8; 128]);
     let len = req.read(&mut buf)?;
     let data = &buf[0..len];
 
+    // 解析JSON数据
     let b: BrightnessReq = serde_json::from_slice(data)?;
 
+    // 验证亮度值范围，必须在0-100之间
     if b.brightness > 100 {
         return Err(anyhow!("亮度值必须在0到100之间"));
     }
 
-    // 更新配置
+    // 更新配置对象中的亮度值
+    // 这会更新内存中的配置，但尚未写入NVS
     if let Some(cfg) = ctx.config.display_config.as_mut() {
         cfg.brightness = b.brightness;
     } else {
         return Err(anyhow!("Display not configured"));
     }
 
-    // 同步更新 DisplayManager
+    // 同步更新DisplayManager中的亮度配置
+    // 确保显示管理器使用的是最新的亮度值
     if let Some(display_manager) = ctx.display.as_mut() {
         display_manager.display_config.brightness = b.brightness;
-
-        // 尝试通过 DCS 0x51 (Write Display Brightness) 指令设置亮度。
-        // 不同面板可能需要额外的寄存器页选择或不同的参数长度。
-        // 我们按顺序尝试几种常见的变体并记录日志（失败不作为致命错误）。
-        let val = ((b.brightness as u16) * 255 / 100) as u8;
-        let mut success = false;
-
-        // 1) 直接发送单字节 0x51（已有实现）
-        if display_manager.display.write_raw_command(0x51, &[val]).is_ok() {
-            info!("Sent DCS 0x51 brightness={}", val);
-            success = true;
-        } else {
-            info!("DCS 0x51 single-byte attempt failed, trying alternatives...");
-
-            // 2) 有些驱动需要先选择寄存器页 (0xFE, 0x00) 后再写 0x51
-            if display_manager.display.write_raw_command(0xFE, &[0x00]).is_ok() {
-                if display_manager.display.write_raw_command(0x51, &[val]).is_ok() {
-                    info!("Sent DCS 0xFE(0x00) then 0x51 brightness={}", val);
-                    success = true;
-                } else {
-                    info!("0xFE(0x00) then 0x51 attempt failed");
-                }
-            } else {
-                info!("0xFE(0x00) bank-select attempt failed or not supported");
-            }
-
-            // 3) 有些控制器期望 2 字节亮度（16-bit）
-            if !success {
-                let two_byte = [0u8, val];
-                if display_manager.display.write_raw_command(0x51, &two_byte).is_ok() {
-                    info!("Sent DCS 0x51 with 2-byte value brightness={}", val);
-                    success = true;
-                } else {
-                    info!("DCS 0x51 2-byte attempt failed");
-                }
-            }
-
-            // 4) 试试另一个常见的寄存器页 (0xFE, 0x01)
-            if !success {
-                if display_manager.display.write_raw_command(0xFE, &[0x01]).is_ok()
-                    && display_manager.display.write_raw_command(0x51, &[val]).is_ok()
-                {
-                    info!("Sent DCS 0xFE(0x01) then 0x51 brightness={}", val);
-                    success = true;
-                } else {
-                    info!("0xFE(0x01) then 0x51 attempt failed or unsupported");
-                }
-            }
-
-            if !success {
-                info!("All DCS brightness attempts failed; panel may not support DCS 0x51 or requires different sequence");
-            }
-        }
     }
 
-    // 保存到NVS
+    // 使用GPIO13 PWM控制背光亮度
+    // 调用display模块的set_brightness()函数，实际设置PWM占空比
+    if let Err(e) = display::set_brightness(ctx, b.brightness) {
+        // PWM设置失败（可能未初始化），记录警告但不返回错误
+        // 因为配置已经成功更新，只是硬件控制失败
+        warn!("Failed to set backlight brightness via GPIO13 PWM: {:?}. This is non-fatal, configuration saved.", e);
+        // 不要返回错误，因为配置保存成功，只是PWM控制可能未初始化
+    } else {
+        // PWM设置成功，记录日志
+        info!("Backlight brightness set to {}% via GPIO13 PWM", b.brightness);
+    }
+
+    // 保存到NVS（非易失性存储）
+    // 这会将亮度值持久化到闪存，重启后自动恢复
     config::save_config(&mut ctx.config_nvs, &ctx.config)?;
 
+    // 在屏幕上显示提示信息，让用户看到亮度已更改
+    // 显示"Brightness: XX%"几秒后自动消失
     let _ = canvas::draw_splash_with_error(ctx, Some("Brightness"), Some(&format!("{}%", b.brightness)));
 
+    // 记录日志，便于调试
     info!("Brightness updated: {}%", b.brightness);
 
     Ok(())

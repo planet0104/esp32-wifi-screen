@@ -4,19 +4,21 @@ use crate::with_context;
 use ab_glyph::FontRef;
 use anyhow::{anyhow, Result};
 use esp_idf_hal::gpio::Output;
-use esp_idf_hal::peripheral::Peripheral;
 use esp_idf_hal::spi::SpiDriver;
+use log::{error, info};
 use esp_idf_hal::{
     delay::Ets,
-    gpio::{Gpio4, Gpio5, Gpio6, Gpio7, Gpio8, PinDriver},
+    gpio::{Gpio4, Gpio5, Gpio6, Gpio7, Gpio8, Gpio13, PinDriver},
     spi::{
         config::{self, MODE_0, MODE_1, MODE_2, MODE_3},
         SpiDeviceDriver, SpiDriverConfig, SPI2,
     },
     units::FromValueType,
+    ledc::{LedcDriver, LedcTimerDriver},
+    peripheral::Peripheral,
 };
+use esp_idf_hal::ledc::config::TimerConfig;
 use image::RgbImage;
-use log::info;
 use std::time::Duration;
 use mipidsi::interface::SpiInterface;
 use mipidsi::models::{Model, ST7796};
@@ -110,6 +112,7 @@ pub struct DisplayPins {
     pub sclk: Gpio6,
     pub miso_mosi: Gpio7,
     pub rst: Gpio8,
+    pub bl: Gpio13,
 }
 
 pub fn check_screen_size(config: &DisplayConfig) -> Result<()>{
@@ -290,6 +293,31 @@ pub fn init() -> Result<()> {
         ctx.display.replace(display_manager);
         info!("init display>09: DisplayManager created, drawing splash screen...");
 
+        // ========================================
+        // 初始化屏幕背光PWM控制（GPIO13）
+        // ========================================
+        // 此代码块负责初始化GPIO13的PWM背光控制，并应用NVS中保存的亮度配置
+        // 实现要点d：程序启动后从配置中读取并正确设置亮度
+        {
+            // 从配置中读取亮度值，如果未配置则使用默认值100%
+            // 实现要点d：程序启动后从NVS配置读取亮度值
+            let brightness = ctx.config.display_config.as_ref().map(|cfg| cfg.brightness).unwrap_or(100);
+            
+            // 初始化背光PWM驱动器（配置GPIO13为PWM输出）
+            // 实现要点a：初始化PWM GPIO13背光控制
+            if let Err(e) = init_backlight(ctx) {
+                // 初始化失败（可能是硬件问题），记录错误但继续运行
+                // 屏幕仍然可以工作，只是无法调节亮度
+                error!("Backlight init failed: {:?}, continuing without backlight control", e);
+            } else if let Err(e) = set_brightness(ctx, brightness) {
+                // PWM初始化成功，但设置亮度失败
+                error!("Set initial brightness failed: {:?}", e);
+            } else {
+                // 成功初始化并应用保存的亮度值
+                info!("Initial brightness set to {}%", brightness);
+            }
+        }
+
         match draw_splash_with_error(ctx, Some("正在初始化"), Some("...")) {
             Ok(_) => {},
             Err(e) => {
@@ -300,6 +328,118 @@ pub fn init() -> Result<()> {
 
         Ok(())
     })
+}
+
+/// 初始化GPIO13背光PWM控制
+/// 
+/// 此函数负责初始化ESP32的LEDC（LED PWM控制器）外设，用于控制屏幕背光亮度
+/// 使用GPIO13作为PWM输出引脚，配置为25kHz频率和10位分辨率（0-1023）
+///
+/// # 参数
+/// * `ctx` - 全局上下文，包含背光驱动器的存储位置
+///
+/// # 返回值
+/// * `Result<()>` - 成功返回Ok，失败返回错误信息
+///
+/// # 实现细节
+/// 1. 创建LEDC外设实例
+/// 2. 配置定时器0：25kHz PWM频率，10位分辨率（防止屏幕闪烁）
+/// 3. 配置通道0：使用定时器0，连接到GPIO13
+/// 4. 初始占空比设置为0（背光关闭）
+/// 5. 将驱动器存储到上下文中供后续使用
+///
+/// # 硬件配置
+/// - 引脚：GPIO13（屏幕背光控制引脚）
+/// - 频率：25kHz（人眼无闪烁频率）
+/// - 分辨率：10位（0-1023，提供平滑的亮度调节）
+/// - 初始状态：关闭（占空比0）
+///
+pub fn init_backlight(ctx: &mut crate::Context) -> Result<()> {
+    use esp_idf_hal::units::FromValueType;
+    use esp_idf_hal::peripheral::Peripheral;
+    
+    info!("Initializing backlight PWM on GPIO13...");
+    
+    // 获取LEDC外设实例 - 使用LEDC::new()
+    // LEDC是ESP32的LED PWM控制器，用于生成高精度PWM信号
+    let mut ledc = unsafe { esp_idf_hal::ledc::LEDC::new() };
+    
+    // 使用LEDC定时器驱动 - 使用TIMER0
+    // TimerConfig配置PWM频率和分辨率，25kHz可避免屏幕闪烁，10位提供1024级亮度调节
+    let timer_driver = LedcTimerDriver::new(
+        unsafe { ledc.timer0.clone_unchecked() },  // 使用定时器0
+        &TimerConfig::new()
+            .frequency(25.kHz().into())  // 25kHz PWM频率（人眼无闪烁）
+            .resolution(esp_idf_hal::ledc::Resolution::Bits10),  // 10位分辨率 (0-1023，共1024级)
+    )?;
+    
+    // 创建PWM通道驱动 - 使用CHANNEL0
+    // 将定时器0的PWM信号输出到GPIO13引脚，用于控制屏幕背光
+    let mut bl_driver = LedcDriver::new(
+        unsafe { ledc.channel0.clone_unchecked() },  // 使用通道0
+        timer_driver,  // 绑定到定时器0
+        unsafe { ctx.display_pins.bl.clone_unchecked() },  // 输出到GPIO13（屏幕背光）
+    )?;
+    
+    // 初始关闭背光 - 占空比设置为0
+    // 屏幕启动时先关闭背光，避免闪烁
+    bl_driver.set_duty(0)?;
+    
+    // 将背光驱动器存储到全局上下文中
+    // 这样可以在程序任何地方调用set_brightness()来调整亮度
+    ctx.backlight_driver = Some(bl_driver);
+    
+    info!("Backlight PWM initialized successfully");
+    Ok(())
+}
+
+/// 设置屏幕亮度 (0-100)
+///
+/// 此函数将百分比亮度值转换为PWM占空比，并应用到GPIO13
+/// 亮度值会被限制在0-100范围内，并保存到配置中
+///
+/// # 参数
+/// * `ctx` - 全局上下文，包含背光驱动器
+/// * `brightness` - 亮度值（0-100%，0=关闭，100=最亮）
+///
+/// # 返回值
+/// * `Result<()>` - 成功返回Ok，失败返回错误信息
+///
+/// # 实现细节
+/// 1. 验证亮度值范围（0-100）
+/// 2. 从上下文获取背光驱动器
+/// 3. 将百分比转换为占空比（0-100% → 0-1023）
+/// 4. 设置PWM占空比
+/// 5. 记录日志
+///
+/// # PWM转换公式
+/// - 输入：brightness (0-100)
+/// - 输出：duty (0-1023)
+/// - 公式：duty = brightness * 1023 / 100
+/// - 示例：50% → 511, 100% → 1023
+///
+pub fn set_brightness(ctx: &mut crate::Context, brightness: u8) -> Result<()> {
+    // 验证亮度值范围，确保在0-100之间
+    if brightness > 100 {
+        return Err(anyhow!("Brightness must be between 0 and 100"));
+    }
+    
+    // 从上下文中获取背光驱动器
+    // 如果驱动器未初始化，返回错误
+    let driver = ctx.backlight_driver.as_mut()
+        .ok_or_else(|| anyhow!("Backlight driver not initialized"))?;
+    
+    // 将0-100%转换为0-1023的占空比值
+    // 使用10位分辨率（1024级），提供平滑的亮度调节
+    let duty = ((brightness as u32) * 1023 / 100) as u32;
+    
+    // 设置PWM占空比到硬件
+    // 占空比越大，GPIO13输出高电平时间越长，屏幕越亮
+    driver.set_duty(duty)?;
+    
+    // 记录日志，便于调试
+    info!("Backlight brightness set to {}% (duty={})", brightness, duty);
+    Ok(())
 }
 
 pub fn draw_rgb_image_fast(

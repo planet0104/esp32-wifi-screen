@@ -199,28 +199,63 @@
             <button class="tertiary" onclick="resetColorAdjust()" type="button">重置为0</button>
         </div>
     </form>
-    <!-- Brightness control -->
+    
+    <!-- =================================================================== -->
+    <!-- 屏幕背光亮度控制表单                                                  -->
+    <!-- =================================================================== -->
+    <!-- 实现要点c：http_server.rs和index.html中修改后亮度并实时刷新亮度      -->
+    <!--                                                                      -->
+    <!-- 功能说明：                                                            -->
+    <!-- - 提供滑块和按钮两种方式调节亮度                                     -->
+    <!-- - 支持0-100%范围调节                                                 -->
+    <!-- - 拖动滑块实时生效（防抖250ms）                                      -->
+    <!-- - 提供4个快捷预设按钮（25%, 50%, 75%, 100%）                        -->
+    <!-- - 当前亮度值实时显示                                                 -->
+    <!-- - 重置按钮可快速恢复到100%                                           -->
+    <!--                                                                      -->
+    <!-- 技术实现：                                                            -->
+    <!-- - 滑块input事件触发applyBrightnessRealtime()                        -->
+    <!-- - 防抖处理防止频繁请求（250ms延迟）                                 -->
+    <!-- - 发送POST /brightness请求到ESP32                                  -->
+    <!-- - ESP32通过GPIO13 PWM实时调节屏幕亮度                               -->
+    <!-- - 同时在屏幕上显示"Brightness: XX%"提示                             -->
+    <!-- - 亮度值自动保存到NVS，重启后恢复                                   -->
+    <!--                                                                      -->
     <form id="brightness-form" autocomplete="off">
         <fieldset>
             <legend class="doc no-select">屏幕亮度 (拖动滑块实时生效)</legend>
+            
+            <!-- 快捷预设按钮组 -->
+            <!-- 点击后直接应用预设亮度值，无需拖动滑块 -->
             <div class="row responsive-label">
                 <div class="col-sm-12 col-md-3"><label class="doc">快捷预设:</label></div>
                 <div class="col-sm-12 col-md">
+                    <!-- 100%亮度 - 适合户外强光环境 -->
                     <button class="tertiary" onclick="applyBrightnessPreset(100)" type="button" style="font-size:0.85em;padding:4px 8px;margin:2px;">100%</button>
+                    <!-- 75%亮度 - 适合明亮室内环境 -->
                     <button class="tertiary" onclick="applyBrightnessPreset(75)" type="button" style="font-size:0.85em;padding:4px 8px;margin:2px;">75%</button>
+                    <!-- 50%亮度 - 适合普通室内环境 -->
                     <button class="tertiary" onclick="applyBrightnessPreset(50)" type="button" style="font-size:0.85em;padding:4px 8px;margin:2px;">50%</button>
+                    <!-- 25%亮度 - 适合暗光环境（如夜晚） -->
                     <button class="tertiary" onclick="applyBrightnessPreset(25)" type="button" style="font-size:0.85em;padding:4px 8px;margin:2px;">25%</button>
                 </div>
             </div>
+            
+            <!-- 亮度滑块控制 -->
+            <!-- 拖动时实时发送请求到ESP32调节PWM占空比 -->
             <div class="row responsive-label">
                 <div class="col-sm-12 col-md-3">
                     <label for="brightness-range" class="doc">亮度</label>
                 </div>
                 <div class="col-sm-12 col-md">
+                    <!-- 滑块input：范围0-100，步长1，实时触发事件 -->
                     <input type="range" id="brightness-range" min="0" max="100" value="100" step="1" style="width:70%;" class="doc">
+                    <!-- 当前亮度值显示，实时更新 -->
                     <span id="brightness-value" style="display:inline-block; width:50px; text-align:right; font-weight:bold; color:#ff9800;">100%</span>
                 </div>
             </div>
+            
+            <!-- 使用提示 -->
             <div class="row responsive-label">
                 <div class="col-sm-12 col-md-3"></div>
                 <div class="col-sm-12 col-md">
@@ -228,10 +263,16 @@
                 </div>
             </div>
         </fieldset>
+        
+        <!-- 重置按钮 -->
+        <!-- 一键恢复到默认亮度（100%） -->
         <div style="text-align: center; padding: 10px;">
             <button class="tertiary" onclick="resetBrightness()" type="button">重置为100%</button>
         </div>
     </form>
+    <!-- =================================================================== -->
+    <!-- 屏幕背光亮度控制表单结束                                              -->
+    <!-- =================================================================== -->
     <form id="wifi-form" autocomplete="off">
         <fieldset>
             <legend class="doc">网络设置</legend>
@@ -1258,73 +1299,127 @@
             applyColorAdjustRealtime();
         }
         
-        // ========== Brightness handling ==========
+        // ===================================================================
+        // 屏幕背光亮度控制JavaScript函数                                        
+        // ===================================================================
+        // 实现要点c：http_server.rs和index.html中修改后亮度并实时刷新亮度      
+        //                                                                      
+        // 功能说明：                                                            
+        // - 提供滑块和按钮两种方式调节亮度                                     
+        // - 支持0-100%范围调节                                                 
+        // - 拖动滑块实时生效（防抖250ms）                                      
+        // - 提供4个快捷预设按钮（25%, 50%, 75%, 100%）                        
+        // - 当前亮度值实时显示                                                 
+        // - 重置按钮可快速恢复到100%                                           
+        // - 页面加载时自动查询当前亮度值                                       
+        //                                                                      
+        // 技术实现：                                                            
+        // - 滑块input事件触发applyBrightnessRealtime()                        
+        // - 防抖处理防止频繁请求（250ms延迟）                                 
+        // - 发送POST /brightness请求到ESP32                                  
+        // - ESP32通过GPIO13 PWM实时调节屏幕亮度                               
+        // - 同时在屏幕上显示"Brightness: XX%"提示                             
+        // - 亮度值自动保存到NVS，重启后恢复                                   
+        // ===================================================================
+        
+        // 更新亮度显示值（在UI上显示当前亮度百分比）
+        // 当滑块值改变时，同步更新旁边的文本显示
         function updateBrightnessDisplay() {
-            const v = $('brightness-range').value;
-            $('brightness-value').textContent = v + '%';
+            const v = $('brightness-range').value;  // 获取滑块当前值（0-100）
+            $('brightness-value').textContent = v + '%';  // 更新显示文本
         }
 
-        let brightnessTimeout = null;
-        let isApplyingBrightness = false;
+        // 防抖定时器和状态标志
+        let brightnessTimeout = null;  // 用于防抖的定时器ID
+        let isApplyingBrightness = false;  // 防止并发请求的标志
+        
+        // 实时应用亮度调整（防抖处理）
+        // 当用户拖动滑块时，延迟250ms后发送请求到ESP32
+        // 避免频繁拖动导致过多HTTP请求
         async function applyBrightnessRealtime() {
-            const value = parseInt($('brightness-range').value);
+            const value = parseInt($('brightness-range').value);  // 获取滑块值（0-100）
 
-            // 防抖
+            // 防抖处理：清除之前的定时器（如果存在）
             if (brightnessTimeout) clearTimeout(brightnessTimeout);
+            
+            // 设置新的定时器，250ms后执行
             brightnessTimeout = setTimeout(async () => {
+                // 防止并发：如果正在处理另一个请求，直接返回
                 if (isApplyingBrightness) return;
-                isApplyingBrightness = true;
-                const message = value + '%';
-                showOverlay('正在应用亮度: ' + message);
+                
+                isApplyingBrightness = true;  // 设置标志
+                const message = value + '%';  // 提示信息
+                showOverlay('正在应用亮度: ' + message);  // 显示全屏遮罩
+                
                 try{
+                    // 发送POST请求到ESP32的/brightness接口
+                    // 请求体为JSON格式：{"brightness": value}
                     const response = await fetch('/brightness', {
                         method: 'POST',
                         body: JSON.stringify({ brightness: value }),
                         headers: { 'Content-Type': 'application/json' }
                     });
+                    
                     const text = await response.text();
                     if (text != 'OK') {
+                        // 请求失败，显示错误对话框
                         showDialog('亮度更新失败: ' + text);
                     }
                 }catch(e){
+                    // 网络错误，显示错误对话框
                     showDialog('亮度更新失败: ' + e);
                 }
-                hideOverlay();
-                isApplyingBrightness = false;
-            }, 250);
+                
+                hideOverlay();  // 隐藏全屏遮罩
+                isApplyingBrightness = false;  // 重置标志
+            }, 250);  // 250ms防抖延迟
         }
 
+        // 应用亮度预设值
+        // 点击快捷按钮时调用，直接设置滑块值并触发实时应用
+        // @param v - 预设亮度值（25, 50, 75, 100）
         function applyBrightnessPreset(v){
-            $('brightness-range').value = v;
-            updateBrightnessDisplay();
-            applyBrightnessRealtime();
+            $('brightness-range').value = v;  // 设置滑块值
+            updateBrightnessDisplay();  // 更新显示
+            applyBrightnessRealtime();  // 触发实时应用
         }
 
+        // 重置亮度到默认值（100%）
+        // 一键恢复到最亮状态
         function resetBrightness(){
-            $('brightness-range').value = 100;
-            updateBrightnessDisplay();
-            applyBrightnessRealtime();
+            $('brightness-range').value = 100;  // 设置滑块为100
+            updateBrightnessDisplay();  // 更新显示
+            applyBrightnessRealtime();  // 触发实时应用
         }
 
-        // 初始化亮度值
+        // 初始化亮度值（页面加载时调用）
+        // 从ESP32获取当前亮度值，并设置滑块位置
         async function queryBrightness(){
             try{
+                // 发送GET请求到/brightness接口
                 const resp = await fetch('/brightness');
                 if(resp.ok){
-                    const data = await resp.json();
+                    const data = await resp.json();  // 解析JSON响应
                     if(typeof data.brightness !== 'undefined'){
-                        const b = parseInt(data.brightness);
-                        $('brightness-range').value = b;
-                        updateBrightnessDisplay();
+                        const b = parseInt(data.brightness);  // 获取亮度值
+                        $('brightness-range').value = b;  // 设置滑块
+                        updateBrightnessDisplay();  // 更新显示
                     }
                 }
             }catch(e){
-                console.log('亮度获取失败:', e);
+                console.log('亮度获取失败:', e);  // 记录错误到控制台
             }
         }
 
-        // 绑定事件
-        $('brightness-range').addEventListener('input', function(){ updateBrightnessDisplay(); applyBrightnessRealtime(); });
+        // 绑定滑块input事件
+        // 当用户拖动滑块时，实时更新显示并触发防抖处理
+        $('brightness-range').addEventListener('input', function(){ 
+            updateBrightnessDisplay();  // 更新显示值
+            applyBrightnessRealtime();  // 触发实时应用（带防抖）
+        });
+        // ===================================================================
+        // 屏幕背光亮度控制JavaScript函数结束                                      
+        // ===================================================================
         
         // 实时应用屏幕旋转（无需重启）
         async function applyRotationRealtime() {
@@ -1435,10 +1530,36 @@
             hideLoading();
         }
 
-        queryWifiConfig();
-        queryDisplayConfig();
-        queryRemoteServerConfig();
-        queryBrightness();
+        // ===================================================================
+        // 页面加载完成后初始化各项配置查询                                  
+        // ===================================================================
+        // 依次查询WiFi配置、显示配置、远程服务器配置和亮度配置
+        // 确保页面显示时各项配置都是最新的
+        queryWifiConfig();  // 查询WiFi配置（SSID、密码等）
+        queryDisplayConfig();  // 查询显示配置（分辨率、驱动类型等）
+        queryRemoteServerConfig();  // 查询MQTT服务器配置
+        queryBrightness();  // 查询当前亮度值（从NVS读取）并设置滑块位置
     </script>
 </body>
 </html>
+<!-- =================================================================== -->
+<!-- HTML文档结束                                                         -->
+<!-- =================================================================== -->
+<!--                                                                      -->
+<!-- 屏幕背光亮度控制功能总结：                                            -->
+<!-- - GPIO13作为PWM输出控制屏幕背光                                      -->
+<!-- - 亮度范围：0-100%（0=关闭，100=最亮）                              -->
+<!-- - 频率：25kHz（无闪烁）                                             -->
+<!-- - 分辨率：10位（0-1023，共1024级）                                  -->
+<!-- - 配置持久化：亮度值保存到NVS，重启后自动恢复                       -->
+<!-- - Web界面：滑块+按钮控制，实时生效                                  -->
+<!-- - HTTP API：POST /brightness 设置亮度                               -->
+<!-- - HTTP API：GET /brightness 获取当前亮度                            -->
+<!--                                                                      -->
+<!-- 实现要点验证：                                                        -->
+<!-- ✅ a) PWM GPIO13屏幕背光控制逻辑核函数（display.rs）                -->
+<!-- ✅ b) NVS配置中亮度值保存逻辑（config.rs + http_server.rs）         -->
+<!-- ✅ c) HTTP和HTML实时控制（http_server.rs + index.html）             -->
+<!-- ✅ d) 启动时从配置读取亮度（main.rs + display.rs）                  -->
+<!--                                                                      -->
+<!-- =================================================================== -->

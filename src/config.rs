@@ -64,10 +64,27 @@ pub struct DisplayConfig {
     #[serde(default)]
     pub color_adjust_g: i8,
     /// 色调调整：蓝色通道偏移 (-100 到 +100)
+    /// 用于调整屏幕显示的蓝色强度，负数减少蓝色，正数增加蓝色
     #[serde(default)]
     pub color_adjust_b: i8,
-    /// 屏幕亮度 (0-100)，默认100
-    #[serde(default = "default_brightness")]
+    
+    /// 屏幕背光亮度 (0-100)，默认100
+    /// 
+    /// 控制GPIO13 PWM输出的占空比，调节屏幕背光亮度
+    /// - 0: 屏幕关闭（背光完全关闭）
+    /// - 100: 最亮（背光完全打开）
+    /// - 范围: 0-100（百分比）
+    /// - 存储: 该值会保存到NVS闪存中，重启后自动恢复
+    /// - 应用: 启动时从配置读取，实时PWM控制
+    ///
+    /// # 示例值
+    /// - 0: 关闭屏幕（适合夜间或省电模式）
+    /// - 25: 较暗（适合暗光环境）
+    /// - 50: 中等亮度（适合室内）
+    /// - 75: 较亮（适合明亮环境）
+    /// - 100: 最亮（适合户外强光）
+    ///
+    #[serde(default = "default_brightness")]  // 如果配置文件中不存在此字段，使用default_brightness()函数提供默认值
     pub brightness: u8,
 }
 
@@ -94,6 +111,10 @@ impl DisplayConfig{
     }
 }
 
+/// 默认亮度值 - 100%（最亮）
+/// 
+/// 当NVS中未存储亮度配置或配置文件中缺少brightness字段时，
+/// 使用此默认值。设置为100%确保屏幕在首次启动时有足够亮度。
 fn default_brightness() -> u8 { 100 }
 
 #[derive(Serialize, Deserialize, PartialEq, Clone, Debug)]

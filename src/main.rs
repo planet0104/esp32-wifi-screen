@@ -10,7 +10,7 @@ use config::Config;
 use display::{DisplayManager, DisplayPins};
 use embedded_svc::wifi::{AccessPointConfiguration, AuthMethod, Configuration};
 
-use esp_idf_hal::{io::EspIOError, sys::{esp_restart, esp_wifi_set_ps, wifi_ps_type_t_WIFI_PS_NONE, wifi_ps_type_t_WIFI_PS_MIN_MODEM, ESP_FAIL}};
+use esp_idf_hal::{io::EspIOError, sys::{esp_restart, esp_wifi_set_ps, wifi_ps_type_t_WIFI_PS_MIN_MODEM, ESP_FAIL}};
 use esp_idf_svc::{ipv4::{Mask, Subnet}, wifi::{BlockingWifi, ClientConfiguration, EspWifi, WifiDriver}};
 use esp_idf_svc::netif::{EspNetif, NetifConfiguration, NetifStack};
 use esp_idf_svc::{eventloop::EspSystemEventLoop, nvs::EspDefaultNvsPartition};
@@ -20,6 +20,7 @@ use esp_idf_svc::{
     nvs::{EspNvs, NvsDefault},
     sys::EspError,
 };
+use esp_idf_hal::ledc::LedcDriver;
 
 use http_server::print_memory;
 use image::{RgbImage, RgbaImage};
@@ -69,7 +70,10 @@ pub struct Context {
     //记录最后一次访问配置页面的时间，用于防止配置期间自动重启
     //如果超过10分钟没有访问配置，则认为用户已离开，允许自动重启
     #[serde(skip)]
-    last_config_time: Option<Instant>
+    last_config_time: Option<Instant>,
+    //背光控制
+    #[serde(skip)]
+    backlight_driver: Option<LedcDriver<'static>>,
 }
 
 static CONTEXT: Lazy<Mutex<Option<Box<Context>>>> = Lazy::new(|| Mutex::new(None));
@@ -124,19 +128,27 @@ fn main() -> anyhow::Result<()> {
 
     let mut sta_ip_config = ipv4::ClientConfiguration::default();
 
-    //读取配置参数
+    // ========================================
+    // 从NVS读取配置参数（包括屏幕亮度）
+    // ========================================
+    // 此代码块负责从NVS（非易失性存储）读取所有配置
+    // 包括WiFi配置、显示配置（含亮度值）、远程服务器配置
+    // 实现要点d：程序启动后从NVS配置中读取亮度值
     info!("Reading configuration from NVS...");
     let config = match config::read_config(&mut config_nvs) {
         Err(err) => {
+            // 读取配置失败（可能是首次启动或配置损坏）
             error!("config read fail:{err:?}");
             info!("Using default configuration");
+            // 使用默认配置（亮度为100%，见default_brightness()函数）
             Config::default()
         }
         Ok(c) => {
             info!("Configuration loaded successfully");
+            
+            // 打印WiFi配置信息
             if let Some(wifi_c) = c.wifi_config.as_ref() {
                 info!("WiFi config found: SSID={}", wifi_c.ssid);
-                // if let (Some(ip), Some(gw)) = (wifi_c.device_ip.clone(), wifi_c.gateway_ip.clone())
                 if let Some(ip) = wifi_c.device_ip.clone()
                 {
                     info!("Static IP configured: {}", ip);
@@ -146,11 +158,16 @@ fn main() -> anyhow::Result<()> {
                     });
                 }
             }
+            
+            // 打印显示配置信息（包括亮度值）
+            // 实现要点d：配置已加载到内存，包含亮度值
             if let Some(display_c) = c.display_config.as_ref() {
                 info!("Display config found: type={:?}, size={}x{}", 
                     display_c.display_type, display_c.width, display_c.height);
+                // 记录从NVS读取的亮度值
+                info!("Brightness loaded from NVS: {}%", display_c.brightness);
             } else {
-                info!("No display configuration found");
+                info!("No display configuration found, using default brightness: 100%");
             }
             c
         }
@@ -205,6 +222,7 @@ fn main() -> anyhow::Result<()> {
             sclk: peripherals.pins.gpio6,
             miso_mosi: peripherals.pins.gpio7,
             rst: peripherals.pins.gpio8,
+            bl: peripherals.pins.gpio13,
         };
         let mut ctx = CONTEXT.lock().map_err(|err| anyhow!("{err:?}"))?;
         ctx.replace(Box::new(Context {
@@ -217,6 +235,7 @@ fn main() -> anyhow::Result<()> {
             wifi,
             image_cache: HashMap::new(),
             last_config_time: None,
+            backlight_driver: None,
         }));
         info!("Context initialized successfully");
     }
@@ -229,6 +248,7 @@ fn main() -> anyhow::Result<()> {
     print_memory("init display>01");
     std::thread::sleep(Duration::from_secs(2));
     
+    // 初始化显示屏和背光PWM
     match display::init() {
         Ok(_) => {
             info!("Display initialized successfully!");
