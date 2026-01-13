@@ -199,6 +199,39 @@
             <button class="tertiary" onclick="resetColorAdjust()" type="button">重置为0</button>
         </div>
     </form>
+    <!-- Brightness control -->
+    <form id="brightness-form" autocomplete="off">
+        <fieldset>
+            <legend class="doc no-select">屏幕亮度 (拖动滑块实时生效)</legend>
+            <div class="row responsive-label">
+                <div class="col-sm-12 col-md-3"><label class="doc">快捷预设:</label></div>
+                <div class="col-sm-12 col-md">
+                    <button class="tertiary" onclick="applyBrightnessPreset(100)" type="button" style="font-size:0.85em;padding:4px 8px;margin:2px;">100%</button>
+                    <button class="tertiary" onclick="applyBrightnessPreset(75)" type="button" style="font-size:0.85em;padding:4px 8px;margin:2px;">75%</button>
+                    <button class="tertiary" onclick="applyBrightnessPreset(50)" type="button" style="font-size:0.85em;padding:4px 8px;margin:2px;">50%</button>
+                    <button class="tertiary" onclick="applyBrightnessPreset(25)" type="button" style="font-size:0.85em;padding:4px 8px;margin:2px;">25%</button>
+                </div>
+            </div>
+            <div class="row responsive-label">
+                <div class="col-sm-12 col-md-3">
+                    <label for="brightness-range" class="doc">亮度</label>
+                </div>
+                <div class="col-sm-12 col-md">
+                    <input type="range" id="brightness-range" min="0" max="100" value="100" step="1" style="width:70%;" class="doc">
+                    <span id="brightness-value" style="display:inline-block; width:50px; text-align:right; font-weight:bold; color:#ff9800;">100%</span>
+                </div>
+            </div>
+            <div class="row responsive-label">
+                <div class="col-sm-12 col-md-3"></div>
+                <div class="col-sm-12 col-md">
+                    <small style="color:#666;">💡 调整范围: 0 到 100。拖动滑块时会自动应用，屏幕会实时刷新显示效果</small>
+                </div>
+            </div>
+        </fieldset>
+        <div style="text-align: center; padding: 10px;">
+            <button class="tertiary" onclick="resetBrightness()" type="button">重置为100%</button>
+        </div>
+    </form>
     <form id="wifi-form" autocomplete="off">
         <fieldset>
             <legend class="doc">网络设置</legend>
@@ -1225,6 +1258,74 @@
             applyColorAdjustRealtime();
         }
         
+        // ========== Brightness handling ==========
+        function updateBrightnessDisplay() {
+            const v = $('brightness-range').value;
+            $('brightness-value').textContent = v + '%';
+        }
+
+        let brightnessTimeout = null;
+        let isApplyingBrightness = false;
+        async function applyBrightnessRealtime() {
+            const value = parseInt($('brightness-range').value);
+
+            // 防抖
+            if (brightnessTimeout) clearTimeout(brightnessTimeout);
+            brightnessTimeout = setTimeout(async () => {
+                if (isApplyingBrightness) return;
+                isApplyingBrightness = true;
+                const message = value + '%';
+                showOverlay('正在应用亮度: ' + message);
+                try{
+                    const response = await fetch('/brightness', {
+                        method: 'POST',
+                        body: JSON.stringify({ brightness: value }),
+                        headers: { 'Content-Type': 'application/json' }
+                    });
+                    const text = await response.text();
+                    if (text != 'OK') {
+                        showDialog('亮度更新失败: ' + text);
+                    }
+                }catch(e){
+                    showDialog('亮度更新失败: ' + e);
+                }
+                hideOverlay();
+                isApplyingBrightness = false;
+            }, 250);
+        }
+
+        function applyBrightnessPreset(v){
+            $('brightness-range').value = v;
+            updateBrightnessDisplay();
+            applyBrightnessRealtime();
+        }
+
+        function resetBrightness(){
+            $('brightness-range').value = 100;
+            updateBrightnessDisplay();
+            applyBrightnessRealtime();
+        }
+
+        // 初始化亮度值
+        async function queryBrightness(){
+            try{
+                const resp = await fetch('/brightness');
+                if(resp.ok){
+                    const data = await resp.json();
+                    if(typeof data.brightness !== 'undefined'){
+                        const b = parseInt(data.brightness);
+                        $('brightness-range').value = b;
+                        updateBrightnessDisplay();
+                    }
+                }
+            }catch(e){
+                console.log('亮度获取失败:', e);
+            }
+        }
+
+        // 绑定事件
+        $('brightness-range').addEventListener('input', function(){ updateBrightnessDisplay(); applyBrightnessRealtime(); });
+        
         // 实时应用屏幕旋转（无需重启）
         async function applyRotationRealtime() {
             const rotation = $('disp-rotation');
@@ -1337,6 +1438,7 @@
         queryWifiConfig();
         queryDisplayConfig();
         queryRemoteServerConfig();
+        queryBrightness();
     </script>
 </body>
 </html>

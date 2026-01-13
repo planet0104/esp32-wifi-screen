@@ -1,0 +1,34 @@
+[package]
+name = "usb_screen_client"
+version = "1.1.0"
+edition = "2021"
+
+[features]
+default = ["usb-serial"]
+usb-serial = []
+usb-raw = []
+
+[dependencies]
+anyhow = "1"
+image = "0.25.1"
+nusb = "0.1.8"
+futures-lite = "2.3.0"
+offscreen-canvas = { git = "https://github.com/planet0104/offscreen-canvas"}
+chrono = "0.4.38"
+gif-dispose = "5"
+gif = { version = "0.13.1", default-features = false}
+serialport = "4.3.0"
+lz4_flex = "0.11.3"
+log = "0.4.29"
+env_logger = "0.11.8"
+ctrlc = "3.4"
+
+[profile.release]
+strip = true
+opt-level = "z"
+lto = true
+panic = "abort"
+codegen-units = 1
+
+[profile.dev]
+strip = true

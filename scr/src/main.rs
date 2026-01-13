@@ -1,5 +1,6 @@
 use core::convert::TryInto;
 use std::{collections::HashMap, net::Ipv4Addr, num::NonZero, sync::Mutex, time::{Duration, Instant}};
+ 
 
 use anyhow::{anyhow, Result};
 use canvas::{
@@ -9,7 +10,7 @@ use config::Config;
 use display::{DisplayManager, DisplayPins};
 use embedded_svc::wifi::{AccessPointConfiguration, AuthMethod, Configuration};
 
-use esp_idf_hal::{io::EspIOError, sys::{esp_restart, esp_wifi_set_ps, wifi_ps_type_t_WIFI_PS_NONE, ESP_FAIL}};
+use esp_idf_hal::{io::EspIOError, sys::{esp_restart, esp_wifi_set_ps, wifi_ps_type_t_WIFI_PS_NONE, wifi_ps_type_t_WIFI_PS_MIN_MODEM, ESP_FAIL}};
 use esp_idf_svc::{ipv4::{Mask, Subnet}, wifi::{BlockingWifi, ClientConfiguration, EspWifi, WifiDriver}};
 use esp_idf_svc::netif::{EspNetif, NetifConfiguration, NetifStack};
 use esp_idf_svc::{eventloop::EspSystemEventLoop, nvs::EspDefaultNvsPartition};
@@ -23,12 +24,14 @@ use esp_idf_svc::{
 use http_server::print_memory;
 use image::{RgbImage, RgbaImage};
 use log::*;
+use std::io::Write;
 use once_cell::sync::Lazy;
 use serde::Serialize;
 mod utils;
 mod canvas;
 mod config;
 mod display;
+mod usb_reader;
 #[allow(unused)]
 mod imageproc;
 mod mqtt_client;
@@ -242,6 +245,8 @@ fn main() -> anyhow::Result<()> {
     info!("Display initialization completed");
     info!("========================================");
 
+    // USB serial descriptor is configured via sdkconfig (fixed serial string)
+
     //启动wifi热点
     info!("Starting WiFi...");
     if let Err(err) = start_wifi() {
@@ -274,6 +279,78 @@ fn main() -> anyhow::Result<()> {
         info!("MQTT client started successfully");
     }
     info!("=== Initialization Complete ===");
+    // Start USB stdin reader now that initialization and display are complete
+    // Create a channel so usb_stdin_reader can send text responses to main thread for reliable stdout flush
+    let (usb_tx, usb_rx) = std::sync::mpsc::channel::<String>();
+
+    // If building for ESP32-S3, install the USB Serial JTAG driver with asymmetric buffers
+    #[cfg(feature = "esp32s3")]
+    {
+        use esp_idf_sys as sys;
+        use core::ffi::c_void;
+        let mut cfg = sys::usb_serial_jtag_driver_config_t {
+            tx_buffer_size: 256,
+            rx_buffer_size: 8192,
+        };
+        unsafe {
+            // install driver (ignore error if already installed)
+            let _ = sys::esp!(sys::usb_serial_jtag_driver_install(&mut cfg as *mut _));
+            let startup_msg = b"READY:HIGH_SPEED_RX\n";
+            let _ = sys::usb_serial_jtag_write_bytes(startup_msg.as_ptr() as *const c_void, startup_msg.len(), 100);
+        }
+    }
+    
+    // ESP32-S2 uses TinyUSB CDC, console is automatically redirected to USB CDC
+    // Just print a ready message to stdout
+    #[cfg(feature = "esp32s2")]
+    {
+        info!("[USB-S2] TinyUSB CDC ready");
+        // Give USB CDC time to enumerate on host
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        println!("READY:USB-CDC");
+        let _ = std::io::stdout().flush();
+    }
+    // spawn a thread in main to consume responses and emit them via logger (info!)
+    // Use small stack size (8KB) to save memory on ESP32-S2
+    let _ = std::thread::Builder::new()
+        .name("usb_resp".to_string())
+        .stack_size(8 * 1024)
+        .spawn(move || {
+        // Consume responses from usb reader thread and write them to stdout
+        // so the host-side client receives them directly over the CDC channel.
+        let mut out = std::io::stdout();
+        for line in usb_rx.iter() {
+            // messages already include trailing newline when sent from reader
+            // Write to stdout but avoid flushing each line to reduce contention
+            // with the esp logger which may share the same CDC channel.
+            let _ = out.write_all(line.as_bytes());
+            
+            // For critical protocol responses (device info, speed results), 
+            // flush immediately to ensure host receives them
+            let l = line.trim_end().to_string();
+            if l.starts_with("ESP32-WIFI-SCREEN") || l.starts_with("SPEEDRESULT") || 
+               l.starts_with("BOOTED") || l.starts_with("READY") {
+                let _ = out.flush();
+            }
+            
+            // also mirror into the log for device-side diagnostics
+            // Avoid sending protocol reply lines back through the esp logger
+            // because the esp logger writes to the same CDC channel and would
+            // duplicate output (and can block). Only log non-protocol diagnostics.
+            if l.starts_with("ERROR:") {
+                log::error!("{}", &l[6..]);
+            } else if l.starts_with("SPEED") || l.starts_with("FRAME_") || l.starts_with("DRAW") || 
+                      l.starts_with("DECOMPRESSED") || l.starts_with("FRAME_START") || 
+                      l.starts_with("FRAME_END") || l.starts_with("BUSY") || 
+                      l.starts_with("SPEEDCANCELLED") || l.starts_with("SPEEDTIMEOUT") ||
+                      l.starts_with("ESP32-WIFI-SCREEN") || l.starts_with("BOOTED") {
+                // these are protocol messages already written to stdout; don't duplicate
+            } else {
+                log::info!("{}", l);
+            }
+        }
+    });
+    usb_reader::start_with_sender(Some(usb_tx));
     Ok(())
 }
 
@@ -311,26 +388,38 @@ fn start_wifi() -> anyhow::Result<()> {
                 .set_configuration(&Configuration::AccessPoint(ap_config))?;
         }
 
-        // Disable WiFi power save for maximum throughput and minimum latency
+        // Set WiFi power save policy:
+        // - On ESP32-S3 prefer MIN_MODEM to reduce power draw on constrained power supplies
+        // - On other chips keep NONE for maximum throughput
+        #[cfg(feature = "esp32s3")]
+        unsafe { esp_wifi_set_ps(wifi_ps_type_t_WIFI_PS_MIN_MODEM) };
+
+        #[cfg(not(feature = "esp32s3"))]
         unsafe { esp_wifi_set_ps(wifi_ps_type_t_WIFI_PS_NONE) };
 
-        if let Err(err) = ctx.wifi.start(){
-            error!("wifi start: {err:?}");
-            let _ = draw_splash_with_error(ctx, Some("热点启动失败"), None);
-            return Ok(());
+        info!("About to start WiFi interface (ctx.wifi.start())...");
+        match ctx.wifi.start() {
+            Ok(_) => info!("ctx.wifi.start() returned Ok"),
+            Err(err) => {
+                error!("wifi start: {err:?}");
+                let _ = draw_splash_with_error(ctx, Some("热点启动失败"), None);
+                return Ok(());
+            }
         }
 
+        info!("Calling ctx.wifi.connect() to attach to STA network (if configured)...");
         let mut err2 = match ctx.wifi.connect(){
-            Ok(_) => None,
+            Ok(_) => { info!("ctx.wifi.connect() returned Ok"); None },
             Err(err) => {
                 error!("wifi connect: {err:?}");
                 Some("Wifi连接失败".to_string())
             }
         };
 
-        if let Err(err) = ctx.wifi.wait_netif_up(){
+        info!("Calling ctx.wifi.wait_netif_up() to wait for network interface up...");
+        if let Err(err) = ctx.wifi.wait_netif_up() {
             error!("wait_netif_up: {err:?}");
-        }else{
+        } else {
             //保存设备ip以及网关ip
             if let Some(cfg) = ctx.config.wifi_config.as_mut() {
                 let mut need_reboot = false;

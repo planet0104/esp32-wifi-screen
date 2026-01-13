@@ -430,6 +430,59 @@ pub fn start_http_server() -> Result<()>{
         },
     )?;
 
+    // HTTP POST 实时设置亮度（不重启）
+    server.fn_handler(
+        "/brightness",
+        Method::Post,
+        |mut req| {
+            with_context1(move |ctx| {
+                match handle_brightness(ctx, &mut req) {
+                    Ok(()) => req
+                        .into_ok_response()?
+                        .write_all("OK".as_bytes())
+                        .map(|_| ()),
+                    Err(err) => req
+                        .into_response(
+                            200,
+                            Some("Error"),
+                            &[("Content-Type", "text/plain; charset=utf-8")],
+                        )?
+                        .write_all(format!("{err:?}").as_bytes())
+                        .map(|_| ()),
+                }
+            })
+        },
+    )?;
+
+    // HTTP GET 获取当前亮度值
+    server.fn_handler("/brightness", Method::Get, |req| {
+        let result = with_context(move |ctx| {
+            if let Some(cfg) = &ctx.config.display_config {
+                Ok(serde_json::json!({ "brightness": cfg.brightness }).to_string())
+            } else {
+                Err(anyhow!("Display not configured"))
+            }
+        });
+        match result {
+            Ok(json) => req
+                .into_response(
+                    200,
+                    Some("OK"),
+                    &[("Content-Type", "application/json; charset=utf-8")],
+                )?
+                .write_all(json.as_bytes())
+                .map(|_| ()),
+            Err(err) => req
+                .into_response(
+                    200,
+                    Some("Error"),
+                    &[("Content-Type", "text/plain; charset=utf-8")],
+                )?
+                .write_all(format!("{err:?}").as_bytes())
+                .map(|_| ()),
+        }
+    })?;
+
     // HTTP GET 获取当前色调调整值
     server.fn_handler("/color_adjust", Method::Get, |req| {
         let result = with_context(move |ctx| {
@@ -1489,6 +1542,100 @@ fn handle_color_adjust(
     
     info!("Color adjustment updated: R={}, G={}, B={}", adjust.r, adjust.g, adjust.b);
     
+    Ok(())
+}
+
+fn handle_brightness(
+    ctx: &mut Context,
+    req: &mut esp_idf_svc::http::server::Request<&mut EspHttpConnection<'_>>,
+) -> Result<()> {
+    #[derive(serde::Deserialize)]
+    struct BrightnessReq {
+        brightness: u8,
+    }
+
+    let mut buf = Box::new(vec![0u8; 128]);
+    let len = req.read(&mut buf)?;
+    let data = &buf[0..len];
+
+    let b: BrightnessReq = serde_json::from_slice(data)?;
+
+    if b.brightness > 100 {
+        return Err(anyhow!("亮度值必须在0到100之间"));
+    }
+
+    // 更新配置
+    if let Some(cfg) = ctx.config.display_config.as_mut() {
+        cfg.brightness = b.brightness;
+    } else {
+        return Err(anyhow!("Display not configured"));
+    }
+
+    // 同步更新 DisplayManager
+    if let Some(display_manager) = ctx.display.as_mut() {
+        display_manager.display_config.brightness = b.brightness;
+
+        // 尝试通过 DCS 0x51 (Write Display Brightness) 指令设置亮度。
+        // 不同面板可能需要额外的寄存器页选择或不同的参数长度。
+        // 我们按顺序尝试几种常见的变体并记录日志（失败不作为致命错误）。
+        let val = ((b.brightness as u16) * 255 / 100) as u8;
+        let mut success = false;
+
+        // 1) 直接发送单字节 0x51（已有实现）
+        if display_manager.display.write_raw_command(0x51, &[val]).is_ok() {
+            info!("Sent DCS 0x51 brightness={}", val);
+            success = true;
+        } else {
+            info!("DCS 0x51 single-byte attempt failed, trying alternatives...");
+
+            // 2) 有些驱动需要先选择寄存器页 (0xFE, 0x00) 后再写 0x51
+            if display_manager.display.write_raw_command(0xFE, &[0x00]).is_ok() {
+                if display_manager.display.write_raw_command(0x51, &[val]).is_ok() {
+                    info!("Sent DCS 0xFE(0x00) then 0x51 brightness={}", val);
+                    success = true;
+                } else {
+                    info!("0xFE(0x00) then 0x51 attempt failed");
+                }
+            } else {
+                info!("0xFE(0x00) bank-select attempt failed or not supported");
+            }
+
+            // 3) 有些控制器期望 2 字节亮度（16-bit）
+            if !success {
+                let two_byte = [0u8, val];
+                if display_manager.display.write_raw_command(0x51, &two_byte).is_ok() {
+                    info!("Sent DCS 0x51 with 2-byte value brightness={}", val);
+                    success = true;
+                } else {
+                    info!("DCS 0x51 2-byte attempt failed");
+                }
+            }
+
+            // 4) 试试另一个常见的寄存器页 (0xFE, 0x01)
+            if !success {
+                if display_manager.display.write_raw_command(0xFE, &[0x01]).is_ok()
+                    && display_manager.display.write_raw_command(0x51, &[val]).is_ok()
+                {
+                    info!("Sent DCS 0xFE(0x01) then 0x51 brightness={}", val);
+                    success = true;
+                } else {
+                    info!("0xFE(0x01) then 0x51 attempt failed or unsupported");
+                }
+            }
+
+            if !success {
+                info!("All DCS brightness attempts failed; panel may not support DCS 0x51 or requires different sequence");
+            }
+        }
+    }
+
+    // 保存到NVS
+    config::save_config(&mut ctx.config_nvs, &ctx.config)?;
+
+    let _ = canvas::draw_splash_with_error(ctx, Some("Brightness"), Some(&format!("{}%", b.brightness)));
+
+    info!("Brightness updated: {}%", b.brightness);
+
     Ok(())
 }
 

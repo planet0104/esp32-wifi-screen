@@ -1,0 +1,1 @@
+node serial_send_test.js --port COM6 --seconds 10 --chunk 4096

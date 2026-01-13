@@ -66,6 +66,9 @@ pub struct DisplayConfig {
     /// 色调调整：蓝色通道偏移 (-100 到 +100)
     #[serde(default)]
     pub color_adjust_b: i8,
+    /// 屏幕亮度 (0-100)，默认100
+    #[serde(default = "default_brightness")]
+    pub brightness: u8,
 }
 
 impl DisplayConfig{
@@ -90,6 +93,8 @@ impl DisplayConfig{
         }
     }
 }
+
+fn default_brightness() -> u8 { 100 }
 
 #[derive(Serialize, Deserialize, PartialEq, Clone, Debug)]
 pub struct WifiConfig {

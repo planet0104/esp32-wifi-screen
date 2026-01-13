@@ -4,5 +4,8 @@
 /Cargo.lock
 /.history
 /*.bin
-!bootloader.bin
-!partitions.bin
+*.bin
+/rp2040_usb_screen
+/USB-Screen
+/esp32_s3_seritalTest
+/tools/node_modules

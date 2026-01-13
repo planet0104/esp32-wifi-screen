@@ -86,6 +86,23 @@ pub enum DisplayInterface {
     ),
 }
 
+impl DisplayInterface {
+    pub fn write_raw_command(&mut self, instruction: u8, params: &[u8]) -> Result<(), anyhow::Error> {
+        match self {
+            DisplayInterface::ST7735s(d) => {
+                // forward to mipidsi Display write_raw_command
+                d.write_raw_command(instruction, params).map_err(|e| anyhow!("write_raw_command failed: {:?}", e))
+            }
+            DisplayInterface::ST7789(d) => {
+                d.write_raw_command(instruction, params).map_err(|e| anyhow!("write_raw_command failed: {:?}", e))
+            }
+            DisplayInterface::ST7796(d) => {
+                d.write_raw_command(instruction, params).map_err(|e| anyhow!("write_raw_command failed: {:?}", e))
+            }
+        }
+    }
+}
+
 pub struct DisplayPins {
     pub spi2: SPI2,
     pub cs: Gpio4,
@@ -291,6 +308,11 @@ pub fn draw_rgb_image_fast(
     y: u16,
     image: &RgbImage,
 ) -> Result<()> {
+    let start_time = std::time::Instant::now();
+    let (width, height) = (image.width() as u16, image.height() as u16);
+    
+    info!("[DRAW_IMG] pos=({},{}) size={}x{}", x, y, width, height);
+    
     let adj_r = display_manager.display_config.color_adjust_r;
     let adj_g = display_manager.display_config.color_adjust_g;
     let adj_b = display_manager.display_config.color_adjust_b;
@@ -308,6 +330,7 @@ pub fn draw_rgb_image_fast(
             ).to_be());
         }
     } else {
+        info!("[DRAW_IMG] color_adjust r={} g={} b={}", adj_r, adj_g, adj_b);
         // 应用色调调整后转换
         for pixel in image.pixels() {
             let r = apply_color_adjust(pixel[0], adj_r);
@@ -316,16 +339,13 @@ pub fn draw_rgb_image_fast(
             pixels.push(rgb888_to_rgb565(r, g, b).to_be());
         }
     }
+
+    // mipidsi 库的 set_pixels_buffer_u16 始终使用 inclusive 结束坐标
+    let (end_x, end_y) = (x + width - 1, y + height - 1);
     
-    let (width, height) = (image.width() as u16, image.height() as u16);
+    info!("[DRAW_IMG] window=({},{})..({},{})", x, y, end_x, end_y);
 
-    let (end_x, end_y) = if display_manager.display_config.inclusive_end_coords{
-        (x + width - 1, y + height - 1)
-    }else{
-        (x + width, y + height)
-    };
-
-    match &mut display_manager.display {
+    let draw_result = match &mut display_manager.display {
         DisplayInterface::ST7735s(display) => {
             display.set_pixels_buffer_u16(x, y, end_x, end_y, pixels.as_mut())
         }
@@ -335,9 +355,20 @@ pub fn draw_rgb_image_fast(
         DisplayInterface::ST7796(display) => {
             display.set_pixels_buffer_u16(x, y, end_x, end_y, pixels.as_mut())
         }
+    };
+    
+    let elapsed_ms = start_time.elapsed().as_millis();
+    
+    match draw_result {
+        Ok(_) => {
+            info!("[DRAW_IMG_OK] {}x{} pixels in {}ms", width, height, elapsed_ms);
+            Ok(())
+        }
+        Err(err) => {
+            info!("[DRAW_IMG_FAIL] error={:?}", err);
+            Err(anyhow!("draw error:{err:?}"))
+        }
     }
-    .map_err(|err| anyhow!("draw error:{err:?}"))?;
-    Ok(())
 }
 
 pub fn draw_rgb565_fast(
@@ -354,11 +385,8 @@ pub fn draw_rgb565_fast(
     
     // 如果没有色调调整，直接绘制
     if adj_r == 0 && adj_g == 0 && adj_b == 0 {
-        let (end_x, end_y) = if display_manager.display_config.inclusive_end_coords{
-            (x + width - 1, y + height - 1)
-        }else{
-            (x + width, y + height)
-        };
+        // Always use inclusive end coordinates for address window (avoid off-by-one stride)
+        let (end_x, end_y) = (x + width - 1, y + height - 1);
         match &mut display_manager.display {
             DisplayInterface::ST7735s(display) => {
                 display.set_pixels_buffer_u16(x, y, end_x, end_y, pixels.as_ref())
@@ -384,11 +412,8 @@ pub fn draw_rgb565_fast(
         adjusted_pixels.push(rgb888_to_rgb565(r, g, b).to_be());
     }
     
-    let (end_x, end_y) = if display_manager.display_config.inclusive_end_coords{
-        (x + width - 1, y + height - 1)
-    }else{
-        (x + width, y + height)
-    };
+    // Always use inclusive end coordinates for address window (avoid off-by-one stride)
+    let (end_x, end_y) = (x + width - 1, y + height - 1);
     match &mut display_manager.display {
         DisplayInterface::ST7735s(display) => {
             display.set_pixels_buffer_u16(x, y, end_x, end_y, &adjusted_pixels)
@@ -412,21 +437,31 @@ pub fn draw_rgb565_u8array_fast(
     height: u16,
     pixels: &[u8],
 ) -> Result<()> {
-    if pixels.len() != width as usize * height as usize * 2{
-        return Err(anyhow!("error: pixels.len() != width*height*2"));
+    let start_time = std::time::Instant::now();
+    let pixel_count = width as usize * height as usize;
+    let expected_bytes = pixel_count * 2;
+    
+    // 验证数据长度
+    if pixels.len() != expected_bytes {
+        info!("[DRAW_ERR] pixels.len={} expected={} ({}x{})", 
+            pixels.len(), expected_bytes, width, height);
+        return Err(anyhow!("error: pixels.len() {} != expected {}", pixels.len(), expected_bytes));
     }
     
     let adj_r = display_manager.display_config.color_adjust_r;
     let adj_g = display_manager.display_config.color_adjust_g;
     let adj_b = display_manager.display_config.color_adjust_b;
     
+    // mipidsi 库的 set_pixels_buffer 始终使用 inclusive 结束坐标
+    // 窗口范围为 [x, end_x] x [y, end_y]，宽度为 end_x - x + 1
+    let (end_x, end_y) = (x + width - 1, y + height - 1);
+    
+    // 输出关键绘制信息
+    info!("[DRAW] pos=({},{}) size={}x{} window=({},{})..({},{}) bytes={}", 
+        x, y, width, height, x, y, end_x, end_y, pixels.len());
+    
     // 如果没有色调调整，直接绘制
-    if adj_r == 0 && adj_g == 0 && adj_b == 0 {
-        let (end_x, end_y) = if display_manager.display_config.inclusive_end_coords{
-            (x + width - 1, y + height - 1)
-        }else{
-            (x + width, y + height)
-        };
+    let draw_result = if adj_r == 0 && adj_g == 0 && adj_b == 0 {
         match &mut display_manager.display {
             DisplayInterface::ST7735s(display) => {
                 display.set_pixels_buffer(x, y, end_x, end_y, pixels)
@@ -438,37 +473,42 @@ pub fn draw_rgb565_u8array_fast(
                 display.set_pixels_buffer(x, y, end_x, end_y, pixels)
             }
         }
-        .map_err(|err| anyhow!("draw error:{err:?}"))?;
-        return Ok(());
-    }
-    
-    // 应用色调调整
-    let mut adjusted_pixels = Vec::with_capacity(pixels.len());
-    for chunk in pixels.chunks_exact(2) {
-        let pixel = u16::from_be_bytes([chunk[0], chunk[1]]);
-        let (r, g, b) = rgb565_to_rgb888_adjusted(pixel, adj_r, adj_g, adj_b);
-        let adjusted = rgb888_to_rgb565(r, g, b);
-        adjusted_pixels.extend_from_slice(&adjusted.to_be_bytes());
-    }
-    
-    let (end_x, end_y) = if display_manager.display_config.inclusive_end_coords{
-        (x + width - 1, y + height - 1)
-    }else{
-        (x + width, y + height)
+    } else {
+        // 应用色调调整
+        info!("[DRAW] color_adjust r={} g={} b={}", adj_r, adj_g, adj_b);
+        let mut adjusted_pixels = Vec::with_capacity(pixels.len());
+        for chunk in pixels.chunks_exact(2) {
+            let pixel = u16::from_be_bytes([chunk[0], chunk[1]]);
+            let (r, g, b) = rgb565_to_rgb888_adjusted(pixel, adj_r, adj_g, adj_b);
+            let adjusted = rgb888_to_rgb565(r, g, b);
+            adjusted_pixels.extend_from_slice(&adjusted.to_be_bytes());
+        }
+        
+        match &mut display_manager.display {
+            DisplayInterface::ST7735s(display) => {
+                display.set_pixels_buffer(x, y, end_x, end_y, &adjusted_pixels)
+            }
+            DisplayInterface::ST7789(display) => {
+                display.set_pixels_buffer(x, y, end_x, end_y, &adjusted_pixels)
+            }
+            DisplayInterface::ST7796(display) => {
+                display.set_pixels_buffer(x, y, end_x, end_y, &adjusted_pixels)
+            }
+        }
     };
-    match &mut display_manager.display {
-        DisplayInterface::ST7735s(display) => {
-            display.set_pixels_buffer(x, y, end_x, end_y, &adjusted_pixels)
+    
+    let elapsed_ms = start_time.elapsed().as_millis();
+    
+    match draw_result {
+        Ok(_) => {
+            info!("[DRAW_OK] {}x{} pixels in {}ms", width, height, elapsed_ms);
+            Ok(())
         }
-        DisplayInterface::ST7789(display) => {
-            display.set_pixels_buffer(x, y, end_x, end_y, &adjusted_pixels)
-        }
-        DisplayInterface::ST7796(display) => {
-            display.set_pixels_buffer(x, y, end_x, end_y, &adjusted_pixels)
+        Err(err) => {
+            info!("[DRAW_FAIL] error={:?}", err);
+            Err(anyhow!("draw error:{err:?}"))
         }
     }
-    .map_err(|err| anyhow!("draw error:{err:?}"))?;
-    Ok(())
 }
 
 // #[inline]

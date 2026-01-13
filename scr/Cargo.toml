@@ -18,14 +18,20 @@ debug = true    # Symbols are nice and they don't increase the size on Flash
 opt-level = "z"
 
 [features]
-default = []
+default = ["esp32s2", "experimental"]
+
+# 芯片选择 features (互斥，只能选择一个)
+esp32s2 = []
+esp32s3 = []
 
 experimental = ["esp-idf-svc/experimental"]
+
 
 [dependencies]
 log = "0.4"
 esp-idf-svc = { version = "0.51", features = ["critical-section", "experimental"] }
 esp-idf-hal = "0.45"
+esp-idf-sys = "0.36.1"
 embedded-svc = {version = "0.28.1", features = [ "use_serde" ] }
 anyhow = { version = "1", default-features = false }
 serde_json = { version = "1", default-features = false, features = ["std"]}
@@ -49,3 +55,9 @@ tjpgdec-rs = { version = "0.4.0", default-features = false, features = ["fast-de
 
 [build-dependencies]
 embuild = "0.33"
+
+[package.metadata."esp-idf-sys"]
+# Force embuild / esp-idf-sys to use workspace installation and specific ESP-IDF version
+esp_idf_tools_install_dir = "workspace"
+esp_idf_version = "v5.3.4"
+esp_idf_sdkconfig_defaults = ["sdkconfig.defaults.esp32s2", "sdkconfig.defaults.esp32s3"]

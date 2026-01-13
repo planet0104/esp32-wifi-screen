@@ -1,6 +1,14 @@
 # Rust often needs a bit of an extra main task stack size compared to C (the default is 3K)
 CONFIG_ESP_MAIN_TASK_STACK_SIZE=8000
 
+# Use custom partition table (relative to project root)
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
+
+# Flash size configuration (4MB)
+CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
+CONFIG_ESPTOOLPY_FLASHSIZE="4MB"
+
 # Use this to set FreeRTOS kernel tick frequency to 1000 Hz (100 Hz by default).
 # This allows to use 1 ms granularity for thread sleeps (10 ms by default).
 # Enable for better network responsiveness
@@ -12,10 +20,28 @@ CONFIG_FREERTOS_HZ=1000
 
 #CONFIG_ESP_CONSOLE_SECONDARY_NONE=y
 CONFIG_ESP_CONSOLE_USB_CDC=y
-CONFIG_ESP_CONSOLE_USB_CDC_NUM=1
 
+# ============ TinyUSB Configuration (Required for ESP32-S2 USB CDC) ============
+# Enable TinyUSB component
+CONFIG_TINYUSB=y
+CONFIG_TINYUSB_CDC_ENABLED=y
+CONFIG_TINYUSB_CDC_COUNT=1
+# USB device descriptor settings
+CONFIG_TINYUSB_DESC_MANUFACTURER_STRING="Espressif"
+CONFIG_TINYUSB_DESC_PRODUCT_STRING="ESP32-S2 USB Screen"
+CONFIG_TINYUSB_DESC_SERIAL_STRING="ESP32SCR"
+# CDC RX/TX buffer size (larger for better throughput)
+CONFIG_TINYUSB_CDC_RX_BUFSIZE=4096
+CONFIG_TINYUSB_CDC_TX_BUFSIZE=4096
+# USB device VID/PID (use Espressif defaults)
+CONFIG_TINYUSB_DESC_USE_ESPRESSIF_VID=y
+CONFIG_TINYUSB_DESC_USE_DEFAULT_PID=y
+# Enable CDC for console output
+CONFIG_TINYUSB_CDC_ENABLED_FOR_CONSOLE=y
+
+# PSRAM Configuration (ESP32-S2 uses Quad SPI, not Octal)
 CONFIG_SPIRAM=y
-CONFIG_SPIRAM_MODE_OCT=y
+CONFIG_SPIRAM_MODE_QUAD=y
 CONFIG_SPIRAM_SPEED_80M=y
 
 #---------- PSRAM Memory Optimization ----------------
@@ -42,6 +68,12 @@ CONFIG_SPIRAM_ALLOW_STACK_EXTERNAL_MEMORY=y
 
 # Skip memory test for faster boot (optional, enable for production)
 #CONFIG_SPIRAM_MEMTEST=n
+
+#---------- Pthread Configuration (for thread stack in PSRAM) ----------------
+# Default pthread stack size (can be overridden per-thread)
+CONFIG_PTHREAD_TASK_STACK_SIZE_DEFAULT=4096
+# Allow pthread to use PSRAM for stacks
+CONFIG_PTHREAD_STACK_MIN=768
 
 #
 # ESP32S2-specific
@@ -80,39 +112,39 @@ CONFIG_HTTPD_PURGE_BUF_LEN=64
 # WiFi Performance Optimization for Maximum Speed
 # https://docs.espressif.com/projects/esp-idf/zh_CN/latest/esp32s2/api-guides/performance/speed.html
 
-#---------- WiFi Buffer Configuration (High Performance) ----------------
-# Static RX buffer: Higher = better throughput, uses more DRAM
-CONFIG_ESP_WIFI_STATIC_RX_BUFFER_NUM=16
-# Dynamic RX buffer: Higher = better throughput
-CONFIG_ESP_WIFI_DYNAMIC_RX_BUFFER_NUM=64
-# Dynamic TX buffer
-CONFIG_ESP_WIFI_DYNAMIC_TX_BUFFER_NUM=64
+#---------- WiFi Buffer Configuration (Balanced for ESP32-S2 memory) ----------------
+# Static RX buffer: Lower than S3 to save internal RAM
+CONFIG_ESP_WIFI_STATIC_RX_BUFFER_NUM=8
+# Dynamic RX buffer: Lower than S3 to save memory
+CONFIG_ESP_WIFI_DYNAMIC_RX_BUFFER_NUM=32
+# Dynamic TX buffer: Lower than S3 to save memory
+CONFIG_ESP_WIFI_DYNAMIC_TX_BUFFER_NUM=32
 
-#---------- AMPDU (Block Acknowledgment) - Critical for speed ----------------
+#---------- AMPDU (Block Acknowledgment) - Balanced for ESP32-S2 ----------------
 # Enable AMPDU for higher throughput
 CONFIG_ESP_WIFI_AMPDU_TX_ENABLED=y
-CONFIG_ESP_WIFI_TX_BA_WIN=32
+CONFIG_ESP_WIFI_TX_BA_WIN=16
 CONFIG_ESP_WIFI_AMPDU_RX_ENABLED=y
-CONFIG_ESP_WIFI_RX_BA_WIN=32
+CONFIG_ESP_WIFI_RX_BA_WIN=16
 
-#---------- lwIP TCP/IP Stack Optimization ----------------
-# Maximum TCP send buffer size
-CONFIG_LWIP_TCP_SND_BUF_DEFAULT=65535
-# Maximum TCP receive window size
-CONFIG_LWIP_TCP_WND_DEFAULT=65535
-# TCP/IP task mailbox sizes
-CONFIG_LWIP_TCP_RECVMBOX_SIZE=64
-CONFIG_LWIP_UDP_RECVMBOX_SIZE=64
-CONFIG_LWIP_TCPIP_RECVMBOX_SIZE=64
+#---------- lwIP TCP/IP Stack Optimization (Balanced for ESP32-S2) ----------------
+# Maximum TCP send buffer size (reduced for ESP32-S2)
+CONFIG_LWIP_TCP_SND_BUF_DEFAULT=32768
+# Maximum TCP receive window size (reduced for ESP32-S2)
+CONFIG_LWIP_TCP_WND_DEFAULT=32768
+# TCP/IP task mailbox sizes (reduced for ESP32-S2)
+CONFIG_LWIP_TCP_RECVMBOX_SIZE=32
+CONFIG_LWIP_UDP_RECVMBOX_SIZE=32
+CONFIG_LWIP_TCPIP_RECVMBOX_SIZE=32
 
 #---------- WiFi IRAM Optimization (Enable for Speed) ----------------
 # Place WiFi library functions in IRAM for faster execution
 CONFIG_ESP_WIFI_IRAM_OPT=y
 CONFIG_ESP_WIFI_RX_IRAM_OPT=y
 
-#---------- Additional Performance Options ----------------
-# Enable WiFi cache TX buffers (improve throughput)
-CONFIG_ESP_WIFI_CACHE_TX_BUFFER_NUM=32
+#---------- Additional Performance Options (Balanced for ESP32-S2) ----------------
+# Enable WiFi cache TX buffers (reduced for ESP32-S2)
+CONFIG_ESP_WIFI_CACHE_TX_BUFFER_NUM=16
 
 # lwIP additional optimizations
 CONFIG_LWIP_IRAM_OPTIMIZATION=y
