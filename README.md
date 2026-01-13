@@ -2,6 +2,16 @@
 
 基于 **ESP32-S2 / ESP32-S3** 的小屏幕项目，支持通过 **WiFi**（HTTP/WebSocket/MQTT）或 **USB 串口** 高速传输图像并显示到 TFT 屏幕。
 
+## 效果展示
+
+![screen0](images/screen0.jpg)
+
+![screen1](images/screen1.jpg)
+
+![screen2](images/screen2.jpg)
+
+![screen3](images/screen3.jpg)
+
 ## 目录结构
 
 本仓库已将 ESP32 固件项目移动到仓库根目录（不再有 `scr/` 子项目），常用目录如下：
@@ -221,6 +231,16 @@ BL  -> VBUS
 ![setup10](images/setup10.jpg)
 ![setup11](images/setup11.jpg)
 
+#### 传输速度测试步骤
+
+1. 选择测试数据大小（10KB 到 1MB）
+2. 点击“测试HTTP”按钮测试 HTTP 传输速度
+3. 点击“测试WebSocket”按钮测试 WebSocket 传输速度
+4. 测试结果会显示传输速率（KB/s 或 MB/s）和耗时
+5. 测试日志会显示详细的测试过程信息
+
+一般情况下，WebSocket 传输速度会比 HTTP 更快，更适合实时屏幕更新。
+
 ## USB 串口传图
 
 ### 适用芯片
@@ -281,11 +301,44 @@ BL  -> VBUS
 
 Virtual Display Driver：
 - 项目主页：`https://github.com/VirtualDisplay/Virtual-Display-Driver`
+- 推荐版本（与原文档一致）：[24.12.24 release](https://github.com/VirtualDisplay/Virtual-Display-Driver/releases/tag/24.12.24)
+- 安装包示例：[Virtual.Display.Driver-v24.12.24-setup-x64.exe](https://github.com/VirtualDisplay/Virtual-Display-Driver/releases/download/24.12.24/Virtual.Display.Driver-v24.12.24-setup-x64.exe)
 
 参考流程（截图在 `images/`）：
 - 安装驱动：`images/vdd0.jpg` 到 `images/vdd6.jpg`
 - 调整虚拟屏幕分辨率与刷新配置：`images/vdd7.jpg` 到 `images/vdd12.jpg`
 - 连接客户端并开始镜像：`images/client0.jpg`、`images/client.jpg`
+
+### 使用上位机连接 WiFi 显示器
+
+#### 1. 获取 WiFi 屏幕的局域网 IP
+
+设备完成 WiFi 配置后，在配置界面可以看到局域网 IP，之后用该 IP 访问配置界面与上位机客户端。
+
+#### 2. 使用 WiFi-Screen-Client 连接
+
+1. 启动 `tools/wifi-screen-client/` 的客户端程序
+2. 连接方式选择 `WiFi (IP)`
+3. 选择显示器
+   - 建议选择 Virtual Display Driver 创建的虚拟显示器，分辨率按你的屏幕比例设置
+4. 在“WiFi屏幕IP”输入设备 IP
+5. 点击“测试”
+   - 客户端会请求 `http://{ip}/display_config` 与 `http://{ip}/draw_image`，用于验证设备在线与接口可用
+6. 测试成功后，设置“传输格式”和“截屏延迟”，点击“启动”
+   - 启动后会使用 `ws://{ip}/ws` 建立 WebSocket 连接并持续推送截屏数据
+
+#### 3. 参数建议
+
+- 截屏延迟
+  - 值越小刷新越快，但占用 CPU 和网络更高
+  - 屏幕分辨率越大建议延迟越大，避免卡顿
+- 传输格式
+  - `RGB565` 延迟低但带宽占用更高
+  - `JPG xx%` 带宽更省但编码耗时更高，适合 WiFi 环境较差时
+
+#### 4. 连接 WiFi 显示器（原文档提示）
+
+输入 WiFi 显示器的 IP 地址，测试通过后点击“启动”即可。
 
 ## 其他语言示例
 
