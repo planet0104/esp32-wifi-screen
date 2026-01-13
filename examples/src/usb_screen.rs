@@ -3,11 +3,16 @@ use image::{Rgb, RgbImage};
 use nusb::Interface;
 use anyhow::Result;
 use serialport::{SerialPort, SerialPortInfo, SerialPortType};
-
+use log::info;
+use log::error;
 use crate::rgb565::rgb888_to_rgb565_be;
 
 use std::time::{Instant, Duration};
 use std::io::Write;
+
+// ============ 配置开关 ============
+// 是否在发送图像后等待设备 ACK 回复（关闭可提高连续绘制速度）
+pub const WAIT_ACK_DEFAULT: bool = false;
 
 // READ_INF_MAGIC 占位常量（与 find_usb_scr.rs 中一致）
 const READ_INF_MAGIC: u64 = 0x52656164496e666f;
@@ -175,11 +180,16 @@ pub fn clear_screen(color: Rgb<u8>, interface:&Interface, width: u16, height: u1
 }
 
 pub fn clear_screen_serial(color: Rgb<u8>, port:&mut dyn SerialPort, width: u16, height: u16) -> anyhow::Result<()>{
+    clear_screen_serial_ex(color, port, width, height, WAIT_ACK_DEFAULT)
+}
+
+/// 清屏函数（可控制是否等待 ACK）
+pub fn clear_screen_serial_ex(color: Rgb<u8>, port:&mut dyn SerialPort, width: u16, height: u16, wait_ack: bool) -> anyhow::Result<()>{
     let mut img = RgbImage::new(width as u32, height as u32);
     for p in img.pixels_mut(){
         *p = color;
     }
-    draw_rgb_image_serial(0, 0, &img, port)
+    draw_rgb_image_serial_ex(0, 0, &img, port, wait_ack)
 }
 
 pub fn draw_rgb_image(x: u16, y: u16, img:&RgbImage, interface:&Interface) -> anyhow::Result<()>{
@@ -215,15 +225,27 @@ pub fn draw_rgb565(rgb565:&[u8], x: u16, y: u16, width: u16, height: u16, interf
 }
 
 pub fn draw_rgb_image_serial(x: u16, y: u16, img:&RgbImage, port:&mut dyn SerialPort) -> anyhow::Result<()>{
+    draw_rgb_image_serial_ex(x, y, img, port, WAIT_ACK_DEFAULT)
+}
+
+/// 绘制图像（可控制是否等待 ACK）
+pub fn draw_rgb_image_serial_ex(x: u16, y: u16, img:&RgbImage, port:&mut dyn SerialPort, wait_ack: bool) -> anyhow::Result<()>{
     //ST7789驱动使用的是Big-Endian
     let rgb565 = rgb888_to_rgb565_be(&img, img.width() as usize, img.height() as usize);
-    draw_rgb565_serial(&rgb565, x, y, img.width() as u16, img.height() as u16, port)
+    draw_rgb565_serial_ex(&rgb565, x, y, img.width() as u16, img.height() as u16, port, wait_ack)
 }
 
 pub fn draw_rgb565_serial(rgb565:&[u8], x: u16, y: u16, width: u16, height: u16, port:&mut dyn SerialPort) -> anyhow::Result<()>{
+    draw_rgb565_serial_ex(rgb565, x, y, width, height, port, WAIT_ACK_DEFAULT)
+}
+
+/// 发送 RGB565 数据到设备（可控制是否等待 ACK）
+/// - wait_ack: true 时等待设备回复 DRAW_OK，false 时发送后立即返回
+pub fn draw_rgb565_serial_ex(rgb565:&[u8], x: u16, y: u16, width: u16, height: u16, port:&mut dyn SerialPort, wait_ack: bool) -> anyhow::Result<()>{
     let rgb565_u8_slice = lz4_flex::compress_prepend_size(rgb565);
 
     const IMAGE_AA:u64 = 7596835243154170209;
+    #[allow(dead_code)]
     const BOOT_USB:u64 = 7093010483740242786;
     const IMAGE_BB:u64 = 7596835243154170466;
 
@@ -233,25 +255,30 @@ pub fn draw_rgb565_serial(rgb565:&[u8], x: u16, y: u16, width: u16, height: u16,
     img_begin[10..12].copy_from_slice(&height.to_be_bytes());
     img_begin[12..14].copy_from_slice(&x.to_be_bytes());
     img_begin[14..16].copy_from_slice(&y.to_be_bytes());
-    println!("[serial] header len=16, compressed payload len={} bytes", rgb565_u8_slice.len());
 
+    // 发送帧头
     port.write(img_begin)?;
     port.flush()?;
-    println!("[serial] header sent");
 
-    // write compressed payload in one go
+    // 发送压缩数据
     port.write(&rgb565_u8_slice)?;
     port.flush()?;
-    println!("[serial] compressed payload sent");
 
+    // 发送帧尾
     port.write(&IMAGE_BB.to_be_bytes())?;
     port.flush()?;
-    println!("[serial] trailer sent");
-    // After sending a frame, wait for device reply lines (DRAW_OK, FRAME_PARSED, ERROR:)
+
+    // 如果不需要等待 ACK，直接返回
+    if !wait_ack {
+        return Ok(());
+    }
+
+    // 等待设备回复 DRAW_OK/FRAME_PARSED/ERROR
     let start = Instant::now();
     let mut resp_buf: Vec<u8> = Vec::new();
-    let mut read_buf = [0u8; 256];
-    while start.elapsed() < Duration::from_secs(8) {
+    let mut read_buf = [0u8; 512];
+    // 最多等待 2 秒
+    while start.elapsed() < Duration::from_secs(2) {
         match port.read(&mut read_buf) {
             Ok(n) if n > 0 => {
                 resp_buf.extend_from_slice(&read_buf[..n]);
@@ -259,7 +286,7 @@ pub fn draw_rgb565_serial(rgb565:&[u8], x: u16, y: u16, width: u16, height: u16,
                     let line = String::from_utf8_lossy(&resp_buf[..pos]).to_string();
                     resp_buf.drain(..=pos);
                     let ltrim = line.trim();
-                    println!("device reply: {}", ltrim);
+                    info!("device reply: {}", ltrim);
                     if ltrim.starts_with("DRAW_OK") || ltrim.starts_with("FRAME_PARSED") || ltrim.starts_with("ERROR:") {
                         return Ok(());
                     }

@@ -1,8 +1,15 @@
 use std::io::Cursor;
 use std::thread::sleep;
-use std::time::Duration;
+use std::time::{Duration, Instant};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use anyhow::Result;
 use image::{buffer::ConvertBuffer, imageops::resize, RgbImage, RgbaImage};
+
+// ============ 配置参数 ============
+// 帧间延迟（毫秒），防止 USB 缓冲区溢出
+// ESP32 处理 240x240 图像约需 30-50ms，设置为 35ms 较为安全
+const FRAME_DELAY_MS: u64 = 35;
 
 pub fn draw(
     #[cfg(feature = "usb-serial")]
@@ -12,7 +19,14 @@ pub fn draw(
     screen_width: u16,
     screen_height: u16,
 ) -> Result<()>{
-   
+    // 设置 Ctrl+C 信号处理，优雅退出
+    let running = Arc::new(AtomicBool::new(true));
+    let r = running.clone();
+    ctrlc::set_handler(move || {
+        println!("\nReceived Ctrl+C, stopping gracefully...");
+        r.store(false, Ordering::SeqCst);
+    }).expect("Error setting Ctrl-C handler");
+    
     let file = Cursor::new(include_bytes!("../assets/tothesky.gif"));
 
     let mut gif_opts = gif::DecodeOptions::new();
@@ -35,23 +49,38 @@ pub fn draw(
         let rgb = resize(&rgb, screen_width as u32, screen_height as u32, image::imageops::FilterType::Triangle);
         frames.push(rgb);
     }
+    
+    println!("Loaded {} frames, starting playback (Ctrl+C to stop)...", frames.len());
 
     let mut counter: usize = 0;
-    loop{
+    let start_time = Instant::now();
+    
+    while running.load(Ordering::SeqCst) {
         for frame in frames.iter(){
+            // 检查是否需要停止
+            if !running.load(Ordering::SeqCst) {
+                break;
+            }
+            
             #[cfg(feature = "usb-serial")]
             crate::usb_screen::draw_rgb_image_serial(0, 0, frame, port)?;
             #[cfg(feature = "usb-raw")]
             crate::usb_screen::draw_rgb_image(0, 0, frame, interface)?;
 
             counter += 1;
-            if counter % 10 == 0 {
-                println!("sent {} frames", counter);
+            if counter % 30 == 0 {
+                let elapsed = start_time.elapsed().as_secs_f32();
+                let fps = counter as f32 / elapsed;
+                println!("sent {} frames, {:.1} fps", counter, fps);
             }
-            // small delay to avoid saturating serial/USB-CDC buffers
-            sleep(Duration::from_millis(40));
+            
+            // 帧间延迟，防止 USB 缓冲区溢出
+            sleep(Duration::from_millis(FRAME_DELAY_MS));
         }
     }
+    
+    println!("Stopped after {} frames", counter);
+    Ok(())
 }
 
 

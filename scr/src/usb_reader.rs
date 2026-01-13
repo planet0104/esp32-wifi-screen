@@ -5,7 +5,18 @@ use std::time::Duration;
 
 use crate::with_context;
 use crate::display;
-// synchronous drawing: no global cache
+
+// ============ 配置开关 ============
+// 是否启用调试 ACK 回显（false 时不发送绘制相关的调试信息，提高传输速度）
+// 测速相关的 SPEEDRESULT 不受此开关影响
+const DEBUG_ACK_ENABLED: bool = false;
+
+// ============ 安全限制 ============
+// 图像接收缓冲区最大大小（防止内存溢出）
+// 对于 320x240 RGB565 图像，压缩后约 50-150KB，设置为 512KB 足够
+const MAX_IMAGE_BUF_SIZE: usize = 512 * 1024;
+// 帧接收超时时间（毫秒），超时后重置接收状态
+const FRAME_RECEIVE_TIMEOUT_MS: u128 = 3000;
 
 // small helper: find the first occurrence of `needle` in `hay`
 fn find_subslice(hay: &[u8], needle: &[u8]) -> Option<usize> {
@@ -64,7 +75,18 @@ pub fn start_with_sender(sender: Option<Sender<String>>) {
                 let mut image_height: u16 = 0;
                 let mut image_x: u16 = 0;
                 let mut image_y: u16 = 0;
+                // 帧接收开始时间（用于超时检测）
+                let mut frame_start_time: Option<std::time::Instant> = None;
+                // 空闲计数器（用于定期让出 CPU）
+                let mut idle_count: u32 = 0;
 
+                // 发送调试信息（受 DEBUG_ACK_ENABLED 控制）
+                let send_debug = |sender: &Option<Sender<String>>, msg: String| {
+                    if DEBUG_ACK_ENABLED {
+                        if let Some(s) = sender { let _ = s.send(msg); }
+                    }
+                };
+                // 发送重要信息（始终发送，如测速结果、设备信息）
                 let send_info = |sender: &Option<Sender<String>>, msg: String| {
                     if let Some(s) = sender { let _ = s.send(msg); }
                 };
@@ -81,10 +103,34 @@ pub fn start_with_sender(sender: Option<Sender<String>>) {
                             10u32,
                         )
                     };
+                    
                     if n <= 0 {
-                        // no bytes
+                        // 无数据时处理超时和空闲
+                        idle_count += 1;
+                        
+                        // 每 100 次空闲循环让出一次 CPU，喂看门狗
+                        if idle_count >= 100 {
+                            idle_count = 0;
+                            thread::sleep(Duration::from_millis(1));
+                        }
+                        
+                        // 检查帧接收超时
+                        if receiving {
+                            if let Some(start) = frame_start_time {
+                                if start.elapsed().as_millis() > FRAME_RECEIVE_TIMEOUT_MS {
+                                    // 帧接收超时，重置状态
+                                    log::warn!("[USB] Frame receive timeout, resetting state. buf_size={}", image_buf.len());
+                                    receiving = false;
+                                    image_buf.clear();
+                                    buf.clear();
+                                    frame_start_time = None;
+                                }
+                            }
+                        }
                         continue;
                     }
+                    
+                    idle_count = 0;
                     let n_usize = n as usize;
                     buf.extend_from_slice(&read_buf[..n_usize]);
 
@@ -122,37 +168,50 @@ pub fn start_with_sender(sender: Option<Sender<String>>) {
                         if receiving {
                             image_buf.extend_from_slice(&buf);
                             buf.clear();
+                            
+                            // 检查缓冲区大小限制
+                            if image_buf.len() > MAX_IMAGE_BUF_SIZE {
+                                log::warn!("[USB] Image buffer overflow ({}), resetting", image_buf.len());
+                                receiving = false;
+                                image_buf.clear();
+                                frame_start_time = None;
+                                continue;
+                            }
+                            
                             if let Some(pos) = find_subslice(&image_buf, &bb_bytes) {
+                                // 帧接收完成，清除超时计时器
+                                frame_start_time = None;
+                                
                                 let compressed_len = pos;
                                 let compressed_data = image_buf[..compressed_len].to_vec();
                                 let remainder_start = pos + bb_bytes.len();
                                 let remainder = image_buf[remainder_start..].to_vec();
                                 image_buf.clear();
                                 buf.extend_from_slice(&remainder);
-                                // 计算压缩率
+                                // 计算压缩率（调试信息）
                                 let compression_ratio = if compressed_len > 0 {
                                     (image_width as usize * image_height as usize * 2) as f32 / compressed_len as f32
                                 } else { 0.0 };
-                                let _ = send_info(&sender, format!("FRAME_RECV;compressed={};ratio={:.1}\n", compressed_len, compression_ratio));
+                                send_debug(&sender, format!("FRAME_RECV;compressed={};ratio={:.1}\n", compressed_len, compression_ratio));
                                 
                                 match lz4_flex::decompress_size_prepended(&compressed_data) {
                                     Ok(decompressed) => {
                                         let expected = image_width as usize * image_height as usize * 2;
-                                        let _ = send_info(&sender, format!("LZ4_OK;decompressed={};expected={}\n", decompressed.len(), expected));
+                                        send_debug(&sender, format!("LZ4_OK;decompressed={};expected={}\n", decompressed.len(), expected));
                                         if decompressed.len() != expected {
                                             let _ = send_error(&sender, format!("SIZE_MISMATCH;decompressed={};expected={}\n", decompressed.len(), expected));
                                         } else {
                                             // 记录绘制开始时间
                                             let draw_start = std::time::Instant::now();
-                                            let _ = send_info(&sender, format!("DRAW_START;x={};y={};w={};h={};bytes={}\n", 
+                                            send_debug(&sender, format!("DRAW_START;x={};y={};w={};h={};bytes={}\n", 
                                                 image_x, image_y, image_width, image_height, decompressed.len()));
                                             
                                             let draw_result = std::panic::catch_unwind(|| {
                                                 with_context(|ctx| {
                                                     if let Some(display_manager) = ctx.display.as_mut() {
-                                                        // 获取屏幕信息用于回复
+                                                        // 获取屏幕信息用于回复（调试信息）
                                                         let (screen_w, screen_h) = display_manager.get_screen_size();
-                                                        let _ = send_info(&sender, format!("SCREEN_SIZE;w={};h={}\n", screen_w, screen_h));
+                                                        send_debug(&sender, format!("SCREEN_SIZE;w={};h={}\n", screen_w, screen_h));
                                                         
                                                         display::draw_rgb565_u8array_fast(
                                                             display_manager,
@@ -172,7 +231,8 @@ pub fn start_with_sender(sender: Option<Sender<String>>) {
                                             let draw_ms = draw_start.elapsed().as_millis();
                                             match draw_result {
                                                 Ok(Ok(_)) => { 
-                                                    let _ = send_info(&sender, format!("DRAW_OK;x={};y={};w={};h={};ms={}\n", 
+                                                    // 绘制成功（调试信息）
+                                                    send_debug(&sender, format!("DRAW_OK;x={};y={};w={};h={};ms={}\n", 
                                                         image_x, image_y, image_width, image_height, draw_ms)); 
                                                 }
                                                 Ok(Err(e)) => { 
@@ -210,9 +270,11 @@ pub fn start_with_sender(sender: Option<Sender<String>>) {
                                 image_x = u16::from_be_bytes([buf[start + 12], buf[start + 13]]);
                                 image_y = u16::from_be_bytes([buf[start + 14], buf[start + 15]]);
                                 buf.drain(..start + 16);
-                                let _ = send_info(&sender, format!("FRAME_START;{};{};{};{}\n", image_width, image_height, image_x, image_y));
+                                send_debug(&sender, format!("FRAME_START;{};{};{};{}\n", image_width, image_height, image_x, image_y));
                                 receiving = true;
                                 image_buf.clear();
+                                // 记录帧接收开始时间
+                                frame_start_time = Some(std::time::Instant::now());
                                 continue;
                             }
                             let pos_bin = find_subslice(&buf, &readinf_bytes);
@@ -283,12 +345,21 @@ pub fn start_with_sender(sender: Option<Sender<String>>) {
                 let mut image_x: u16 = 0;
                 let mut image_y: u16 = 0;
 
+                // 发送调试信息（受 DEBUG_ACK_ENABLED 控制）
+                let send_debug = |sender: &Option<Sender<String>>, msg: String| {
+                    if DEBUG_ACK_ENABLED {
+                        if let Some(s) = sender { let _ = s.send(msg); }
+                    }
+                };
+                // 发送重要信息（始终发送，如测速结果、设备信息）
                 let send_info = |sender: &Option<Sender<String>>, msg: String| {
                     if let Some(s) = sender { let _ = s.send(msg); }
                 };
                 let send_error = |sender: &Option<Sender<String>>, msg: String| {
                     if let Some(s) = sender { let _ = s.send(format!("ERROR:{}\n", msg)); }
                 };
+                // 避免未使用警告
+                let _ = &send_debug;
 
                 loop {
                     match handle.read(&mut read_buf) {

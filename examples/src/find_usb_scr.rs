@@ -19,10 +19,10 @@ fn ts() -> String {
 }
 
 macro_rules! ts_println {
-    ($($arg:tt)*) => { println!("{} {}", ts(), format!($($arg)*)); }
+    ($($arg:tt)*) => { info!("{} {}", ts(), format!($($arg)*)); }
 }
 macro_rules! ts_eprintln {
-    ($($arg:tt)*) => { eprintln!("{} {}", ts(), format!($($arg)*)); }
+    ($($arg:tt)*) => { error!("{} {}", ts(), format!($($arg)*)); }
 }
 
 // Constants copied from the esp32 reader implementation so host and device agree
