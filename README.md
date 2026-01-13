@@ -57,9 +57,11 @@
 | RST/RES | GPIO8 | 复位 |
 | DC/AO | GPIO5 | 数据/命令选择 |
 | CS | GPIO4 | 片选（部分屏幕需要） |
-| BL/BLK | 悬空或 VBUS | 背光（可接 VBUS 5V） |
+| BL/BLK | GPIO13 | PWM背光 |
 
 ### 各屏幕接线参考
+
+### 注意！带问号的是未经过测试的接线！
 
 #### ST7735S 80x160（带 CS）
 
@@ -73,7 +75,7 @@ SDA -> GPIO7
 RST -> GPIO8
 DC  -> GPIO5
 CS  -> GPIO4
-BLK -> (悬空或 VBUS)
+BLK -> GPIO13?
 ```
 
 #### ST7735S 128x160（带 CS）
@@ -88,7 +90,7 @@ SDA -> GPIO7
 RST -> GPIO8
 DC  -> GPIO5
 CS  -> GPIO4
-BL  -> (悬空或 VBUS)
+BL  -> GPIO13?
 ```
 
 #### ST7789 240x240（无 CS）
@@ -102,7 +104,7 @@ SCL -> GPIO6
 SDA -> GPIO7
 RES -> GPIO8
 DC  -> GPIO5
-BLK -> (悬空或 VBUS)
+BLK -> GPIO13
 ```
 
 #### ST7789 240x320（带 CS）
@@ -117,7 +119,7 @@ SDA -> GPIO7
 RST -> GPIO8
 AO  -> GPIO5
 CS  -> GPIO4
-BL  -> VBUS
+BL  -> GPIO13?
 ```
 
 #### ST7789V 135x240（带 CS）
@@ -132,7 +134,7 @@ SDA -> GPIO7
 RES -> GPIO8
 DC  -> GPIO5
 CS  -> GPIO4
-BLK -> (悬空或 VBUS)
+BLK -> GPIO13?
 ```
 
 #### ST7796 320x480（带 CS）
@@ -147,7 +149,7 @@ SDA -> GPIO7
 RST -> GPIO8
 DC  -> GPIO5
 CS  -> GPIO4
-BL  -> VBUS
+BL  -> GPIO13?
 ```
 
 ## 烧录固件
@@ -206,10 +208,22 @@ BL  -> VBUS
 
 ![color_adjust](images/color_adjust.jpg)
 
+### 屏幕亮度调整
+
+可在配置界面中实时调整屏幕亮度，屏幕亮度由GPIO13 PWM控制：
+
+![color_adjust](images/adjust_brightness.png)
+
 ### WiFi 扫描与连接路由器
 
 - 支持扫描附近 WiFi 并自动填充 SSID
 - 保存网络设置后设备重启，之后可在配置界面查看设备的局域网 IP，再用局域网 IP 访问配置界面
+
+扫描附近Wifi:
+
+![setup4](images/scan_wifi.png)
+
+手动输入wifi:
 
 ![setup4](images/setup4.jpg)
 ![setup5](images/setup5.jpg)

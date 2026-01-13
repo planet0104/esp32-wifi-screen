@@ -9,3 +9,6 @@
 /USB-Screen
 /esp32_s3_seritalTest
 /tools/node_modules
+/dist
+/build
+dist.zip

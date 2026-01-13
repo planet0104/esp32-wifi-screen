@@ -10,7 +10,7 @@ use config::Config;
 use display::{DisplayManager, DisplayPins};
 use embedded_svc::wifi::{AccessPointConfiguration, AuthMethod, Configuration};
 
-use esp_idf_hal::{io::EspIOError, sys::{esp_restart, esp_wifi_set_ps, wifi_ps_type_t_WIFI_PS_MIN_MODEM, ESP_FAIL}};
+use esp_idf_hal::{io::EspIOError, sys::{esp_restart, esp_wifi_set_ps,wifi_ps_type_t_WIFI_PS_NONE, wifi_ps_type_t_WIFI_PS_MIN_MODEM, ESP_FAIL}};
 use esp_idf_svc::{ipv4::{Mask, Subnet}, wifi::{BlockingWifi, ClientConfiguration, EspWifi, WifiDriver}};
 use esp_idf_svc::netif::{EspNetif, NetifConfiguration, NetifStack};
 use esp_idf_svc::{eventloop::EspSystemEventLoop, nvs::EspDefaultNvsPartition};
