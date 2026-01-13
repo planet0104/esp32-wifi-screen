@@ -9,8 +9,33 @@ $feature = "esp32s3"
 # 设置环境变量 - 使用绝对路径
 $env:MCU = "esp32s3"
 $projectRoot = $PSScriptRoot
-$env:ESP_IDF_SDKCONFIG_DEFAULTS = "$projectRoot\sdkconfig.defaults.esp32s3"
 $env:ESP_IDF_VERSION = "v5.3.4"
+
+# 读取target目录配置 (需要在构建前获取)
+$configContent = Get-Content ".cargo\config.toml" -Raw -ErrorAction SilentlyContinue
+if ($configContent -match 'target-dir\s*=\s*"([^"]+)"') {
+    $targetDir = $matches[1].Replace('/', '\')
+    if (-not [System.IO.Path]::IsPathRooted($targetDir)) {
+        $targetDir = Join-Path $projectRoot $targetDir
+    }
+} else {
+    $targetDir = Join-Path $projectRoot "target"
+}
+
+# 生成临时 sdkconfig 文件，将 partitions.csv 路径替换为绝对路径
+$srcSdkconfig = Join-Path $projectRoot "sdkconfig.defaults.esp32s3"
+$tempSdkconfig = Join-Path $projectRoot "sdkconfig.defaults.esp32s3.tmp"
+$srcPartitions = Join-Path $projectRoot "partitions.csv"
+# 使用正斜杠格式的绝对路径（CMake/ESP-IDF 兼容）
+$absPartitionsPath = $srcPartitions.Replace('\', '/')
+
+Write-Host "Generating temporary sdkconfig with absolute partition path..." -ForegroundColor Cyan
+$sdkconfigContent = Get-Content $srcSdkconfig -Raw
+$sdkconfigContent = $sdkconfigContent -replace 'CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="[^"]*"', "CONFIG_PARTITION_TABLE_CUSTOM_FILENAME=`"$absPartitionsPath`""
+Set-Content -Path $tempSdkconfig -Value $sdkconfigContent -NoNewline
+Write-Host "  Partition path: $absPartitionsPath" -ForegroundColor DarkCyan
+
+$env:ESP_IDF_SDKCONFIG_DEFAULTS = $tempSdkconfig
 
 Write-Host "Environment variables:" -ForegroundColor Cyan
 Write-Host "  MCU: $env:MCU"
@@ -20,6 +45,11 @@ Write-Host "  ESP_IDF_VERSION: $env:ESP_IDF_VERSION"
 # 使用 --target 和 --features 参数构建
 cargo build --release --target $target --no-default-features --features "$feature,experimental"
 
+# 清理临时文件
+if (Test-Path $tempSdkconfig) {
+    Remove-Item $tempSdkconfig -Force
+}
+
 if ($LASTEXITCODE -ne 0) {
     Write-Host "Build failed!" -ForegroundColor Red
     exit 1
@@ -27,18 +57,7 @@ if ($LASTEXITCODE -ne 0) {
 
 Write-Host "ESP32-S3 compilation successful!" -ForegroundColor Green
 
-# 读取target目录配置
-$configContent = Get-Content ".cargo\config.toml" -Raw
-if ($configContent -match 'target-dir\s*=\s*"([^"]+)"') {
-    $targetDir = $matches[1].Replace('/', '\\')
-    if (-not [System.IO.Path]::IsPathRooted($targetDir)) {
-        $targetDir = Join-Path $projectRoot $targetDir
-    }
-} else {
-    $targetDir = Join-Path $projectRoot "target"
-}
-
-$binaryPath = "$targetDir\\$target\\release\\esp32-wifi-screen"
+$binaryPath = "$targetDir\$target\release\esp32-wifi-screen"
 $binOutputPath = "esp32-wifi-screen-$chip-merged.bin"
 
 # 打印 partitions.csv 与 bootloader.bin 的绝对路径，便于排查

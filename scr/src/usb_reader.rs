@@ -129,64 +129,31 @@ pub fn start_with_sender(sender: Option<Sender<String>>) {
                                 let remainder = image_buf[remainder_start..].to_vec();
                                 image_buf.clear();
                                 buf.extend_from_slice(&remainder);
-                                let _ = send_info(&sender, format!("FRAME_END;compressed_len={}\n", compressed_len));
+                                // 计算压缩率
+                                let compression_ratio = if compressed_len > 0 {
+                                    (image_width as usize * image_height as usize * 2) as f32 / compressed_len as f32
+                                } else { 0.0 };
+                                let _ = send_info(&sender, format!("FRAME_RECV;compressed={};ratio={:.1}\n", compressed_len, compression_ratio));
+                                
                                 match lz4_flex::decompress_size_prepended(&compressed_data) {
                                     Ok(decompressed) => {
-                                        let _ = send_info(&sender, format!("DECOMPRESSED;len={}\n", decompressed.len()));
-                                        // 额外回传：屏幕配置和行/像素样本，帮助定位绘制偏移问题
-                                        // 发送屏幕配置信息
-                                        let screen_info = with_context(|ctx| {
-                                            if let Some(dm) = ctx.display.as_ref() {
-                                                Ok(Some((dm.get_screen_width(), dm.get_screen_height(), dm.display_config.x_offset, dm.display_config.y_offset, dm.display_config.inclusive_end_coords)))
-                                            } else { Ok(None) }
-                                        });
-                                        if let Ok(Some((sw, sh, xo, yo, inclusive))) = screen_info {
-                                            let _ = send_info(&sender, format!("SCREEN_CONFIG;w={};h={};x_offset={};y_offset={};inclusive_end_coords={}\n", sw, sh, xo, yo, inclusive));
-                                        }
-                                        // 回传前若干字节的十六进制样本以便主机比对
-                                        let sample_len = std::cmp::min(8, decompressed.len());
-                                        if sample_len > 0 {
-                                            let sample_hex: String = decompressed[..sample_len].iter().map(|b| format!("{:02X}", b)).collect();
-                                            let _ = send_info(&sender, format!("DECOMPRESSED_SAMPLE;{}\n", sample_hex));
-                                        }
-                                        // 发送每行的前若干字节样本（前4行，每行最多32字节）
-                                        let row_bytes = image_width as usize * 2;
-                                        let preview_rows = std::cmp::min(4, image_height as usize);
-                                        for r in 0..preview_rows {
-                                            let start = r * row_bytes;
-                                            if start >= decompressed.len() { break; }
-                                            let end = std::cmp::min(start + std::cmp::min(32, row_bytes), decompressed.len());
-                                            let row_hex: String = decompressed[start..end].iter().map(|b| format!("{:02X}", b)).collect();
-                                            let _ = send_info(&sender, format!("DECOMPRESSED_ROW;row={};start={};{}\n", r, start, row_hex));
-                                        }
-                                        // 发送前几个 u16 像素值样本
-                                        let pixels_u16 = decompressed.chunks_exact(2).map(|c| u16::from_be_bytes([c[0], c[1]]) ).collect::<Vec<u16>>();
-                                        let sample_pix = std::cmp::min(8, pixels_u16.len());
-                                        if sample_pix > 0 {
-                                            let pix_hex: String = pixels_u16[..sample_pix].iter().map(|p| format!("{:04X}", p)).collect::<Vec<String>>().join(":");
-                                            let _ = send_info(&sender, format!("FIRST_PIXELS_U16;{}\n", pix_hex));
-                                        }
-                                        // 发送 ACK 表示解压成功且样本已发送
-                                        let _ = send_info(&sender, "DECOMPRESSED_ACK\n".to_string());
                                         let expected = image_width as usize * image_height as usize * 2;
-                                        // 回传前若干字节的十六进制样本以便主机比对
-                                        let sample_len = std::cmp::min(8, decompressed.len());
-                                        if sample_len > 0 {
-                                            let sample_hex: String = decompressed[..sample_len].iter().map(|b| format!("{:02X}", b)).collect();
-                                            let _ = send_info(&sender, format!("DECOMPRESSED_SAMPLE;{}\n", sample_hex));
-                                        }
-                                        // 发送 ACK 表示解压成功且样本已发送
-                                        let _ = send_info(&sender, "DECOMPRESSED_ACK\n".to_string());
+                                        let _ = send_info(&sender, format!("LZ4_OK;decompressed={};expected={}\n", decompressed.len(), expected));
                                         if decompressed.len() != expected {
-                                            let _ = send_error(&sender, format!("decompressed size {} != expected {}", decompressed.len(), expected));
+                                            let _ = send_error(&sender, format!("SIZE_MISMATCH;decompressed={};expected={}\n", decompressed.len(), expected));
                                         } else {
+                                            // 记录绘制开始时间
+                                            let draw_start = std::time::Instant::now();
+                                            let _ = send_info(&sender, format!("DRAW_START;x={};y={};w={};h={};bytes={}\n", 
+                                                image_x, image_y, image_width, image_height, decompressed.len()));
+                                            
                                             let draw_result = std::panic::catch_unwind(|| {
-                                                // report drawing params for debugging
-                                                let expected = image_width as usize * image_height as usize * 2;
-                                                let _ = send_info(&sender, format!("DRAW_PARAMS;x={};y={};w={};h={};expected_bytes={}\n", image_x, image_y, image_width, image_height, expected));
-                                                let _ = send_info(&sender, "DRAWING_START\n".to_string());
                                                 with_context(|ctx| {
                                                     if let Some(display_manager) = ctx.display.as_mut() {
+                                                        // 获取屏幕信息用于回复
+                                                        let (screen_w, screen_h) = display_manager.get_screen_size();
+                                                        let _ = send_info(&sender, format!("SCREEN_SIZE;w={};h={}\n", screen_w, screen_h));
+                                                        
                                                         display::draw_rgb565_u8array_fast(
                                                             display_manager,
                                                             image_x,
@@ -195,17 +162,29 @@ pub fn start_with_sender(sender: Option<Sender<String>>) {
                                                             image_height,
                                                             &decompressed,
                                                         )
-                                                    } else { Ok(()) }
+                                                    } else { 
+                                                        let _ = send_error(&sender, "NO_DISPLAY\n".to_string());
+                                                        Ok(()) 
+                                                    }
                                                 })
                                             });
+                                            
+                                            let draw_ms = draw_start.elapsed().as_millis();
                                             match draw_result {
-                                                Ok(Ok(_)) => { let _ = send_info(&sender, "DRAW_OK\n".to_string()); }
-                                                Ok(Err(e)) => { let _ = send_error(&sender, format!("draw failed: {:?}", e)); }
-                                                Err(_) => { let _ = send_error(&sender, "draw panicked".to_string()); }
+                                                Ok(Ok(_)) => { 
+                                                    let _ = send_info(&sender, format!("DRAW_OK;x={};y={};w={};h={};ms={}\n", 
+                                                        image_x, image_y, image_width, image_height, draw_ms)); 
+                                                }
+                                                Ok(Err(e)) => { 
+                                                    let _ = send_error(&sender, format!("DRAW_FAIL;error={:?};ms={}\n", e, draw_ms)); 
+                                                }
+                                                Err(_) => { 
+                                                    let _ = send_error(&sender, format!("DRAW_PANIC;ms={}\n", draw_ms)); 
+                                                }
                                             }
                                         }
                                     }
-                                    Err(e) => { let _ = send_error(&sender, format!("LZ4 decompress failed: {:?}", e)); }
+                                    Err(e) => { let _ = send_error(&sender, format!("LZ4_FAIL;error={:?}\n", e)); }
                                 }
                                 image_buf.clear();
                                 receiving = false;
