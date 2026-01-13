@@ -7,10 +7,11 @@ use anyhow::{anyhow, Result};
 use fast_image_resize::{images::Image, Resizer};
 use image::{buffer::ConvertBuffer, codecs::jpeg::JpegEncoder, RgbImage, RgbaImage};
 use once_cell::sync::Lazy;
+use serialport::SerialPort;
 use tungstenite::{stream::MaybeTlsStream, WebSocket};
 use xcap::Monitor;
 
-use crate::{rgb565::rgb888_to_rgb565_be, show_alert_async, DisplayConfig};
+use crate::{rgb565::rgb888_to_rgb565_be, show_alert_async, usb_serial, DisplayConfig};
 
 #[allow(unused)]
 #[derive(Debug, Clone)]
@@ -38,12 +39,18 @@ pub enum Status{
 
 #[derive(Clone, Debug)]
 pub struct RecorderConfig{
-    pub ip: String,
+    pub target: OutputTarget,
     pub format: ImageFormat,
     pub display_config: DisplayConfig,
     pub monitor_width: i32,
     pub monitor_height: i32,
     pub delay_ms: u64,
+}
+
+#[derive(Clone, Debug)]
+pub enum OutputTarget {
+    Wifi { ip: String },
+    UsbSerial { port_name: String },
 }
 
 pub struct Recorder{
@@ -95,6 +102,8 @@ fn run_recorder(recorder: Arc<Mutex<Recorder>>) -> !{
     let mut monitor = None;
     let mut socket: Option<WebSocket<MaybeTlsStream<TcpStream>>> = None;
     let mut server_ip = String::new();
+    let mut serial_port: Option<Box<dyn SerialPort>> = None;
+    let mut serial_port_name = String::new();
     let mut monitor_width = 0;
     let mut monitor_height = 0;
 
@@ -122,35 +131,69 @@ fn run_recorder(recorder: Arc<Mutex<Recorder>>) -> !{
                     Some(c) => c
                 };
     
-                // ip地址变更，重新连接socket
-                if (server_ip.len() > 0 && server_ip != config.ip) || server_ip.len() == 0{
-                    recorder.websocket_status = Status::Disconnected;
-                    let _ = socket.take();
-                    server_ip = config.ip.clone();
-                    println!("更新了IP:{server_ip}...");
-                    sleep_duration = Duration::from_millis(3000);
-                    continue;
-                }
-    
-                if socket.is_none(){
-                    //连接socket
-                    recorder.websocket_status = Status::Connecting;
-                    let url = format!("ws://{server_ip}/ws");
-                    println!("开始连接:{url}");
-                    if let Ok((s, _resp)) = tungstenite::connect(url){
-                        socket = Some(s);
-                        recorder.websocket_status = Status::Connected;
-                        println!("连接成功{server_ip}..");
-                    }else{
-                        recorder.websocket_status = Status::ConnectFail;
-                        println!("连接失败{server_ip}..");
-                        let _ = socket.take();
-                        sleep_duration = Duration::from_millis(3000);
-                        continue;
+                // Ensure output connection is ready for current target
+                match &config.target {
+                    OutputTarget::Wifi { ip } => {
+                        // Switching target -> drop serial
+                        if serial_port.is_some() {
+                            let _ = serial_port.take();
+                            serial_port_name.clear();
+                        }
+                        // ip地址变更，重新连接socket
+                        if (server_ip.len() > 0 && server_ip != *ip) || server_ip.is_empty() {
+                            recorder.websocket_status = Status::Disconnected;
+                            let _ = socket.take();
+                            server_ip = ip.clone();
+                            println!("更新了IP:{server_ip}...");
+                            sleep_duration = Duration::from_millis(3000);
+                            continue;
+                        }
+
+                        if socket.is_none(){
+                            //连接socket
+                            recorder.websocket_status = Status::Connecting;
+                            let url = format!("ws://{server_ip}/ws");
+                            println!("开始连接:{url}");
+                            if let Ok((s, _resp)) = tungstenite::connect(url){
+                                socket = Some(s);
+                                recorder.websocket_status = Status::Connected;
+                                println!("连接成功{server_ip}..");
+                            }else{
+                                recorder.websocket_status = Status::ConnectFail;
+                                println!("连接失败{server_ip}..");
+                                let _ = socket.take();
+                                sleep_duration = Duration::from_millis(3000);
+                                continue;
+                            }
+                        }
+                    }
+                    OutputTarget::UsbSerial { port_name } => {
+                        // Switching target -> drop websocket
+                        if socket.is_some() {
+                            recorder.websocket_status = Status::Disconnected;
+                            let _ = socket.take();
+                            server_ip.clear();
+                        }
+                        if serial_port_name != *port_name || serial_port.is_none() {
+                            recorder.websocket_status = Status::Connecting;
+                            serial_port_name = port_name.clone();
+                            match usb_serial::open_screen_serial(&serial_port_name) {
+                                Ok(p) => {
+                                    serial_port = Some(p);
+                                    recorder.websocket_status = Status::Connected;
+                                    println!("串口已连接: {serial_port_name}");
+                                }
+                                Err(err) => {
+                                    recorder.websocket_status = Status::ConnectFail;
+                                    eprintln!("串口连接失败({serial_port_name}): {}", err.root_cause());
+                                    let _ = serial_port.take();
+                                    sleep_duration = Duration::from_millis(3000);
+                                    continue;
+                                }
+                            }
+                        }
                     }
                 }
-    
-                let soc = socket.as_mut().unwrap();
     
                 // 显示变更，重新连接显示器
                 let m = match 
@@ -187,10 +230,10 @@ fn run_recorder(recorder: Arc<Mutex<Recorder>>) -> !{
                 };
     
                 //压缩
-                let monitor_left = m.x();
-                let monitor_top = m.y();
-                let monitor_right = monitor_left + m.width() as i32;
-                let monitor_bottom = monitor_top + m.height() as i32;
+                let monitor_left = m.x().unwrap_or(0) as i32;
+                let monitor_top = m.y().unwrap_or(0) as i32;
+                let monitor_right = monitor_left + m.width().unwrap_or(0) as i32;
+                let monitor_bottom = monitor_top + m.height().unwrap_or(0) as i32;
     
                 let position = mouse_position::mouse_position::Mouse::get_mouse_position();
                 let (mouse_x, mouse_y) = match position {
@@ -223,36 +266,67 @@ fn run_recorder(recorder: Arc<Mutex<Recorder>>) -> !{
                     }
                 };
     
-                let out = match &config.format{
-                    ImageFormat::Rgb565Lz4Compressed | ImageFormat::RGB565 => {
-                        let out = rgb888_to_rgb565_be(&img, img.width() as usize, img.height() as usize);
-                        lz4_flex::compress_prepend_size(&out)
+                // Encode payload based on target
+                let out = match &config.target {
+                    OutputTarget::UsbSerial { .. } => {
+                        // USB serial path only supports RGB565 + LZ4 (device protocol)
+                        let rgb565 = rgb888_to_rgb565_be(&img, img.width() as usize, img.height() as usize);
+                        lz4_flex::compress_prepend_size(&rgb565)
                     }
-                    ImageFormat::JPG(quality) => {
-                        let mut out = vec![];
-                        let mut encoder = JpegEncoder::new_with_quality(&mut out, *quality);
-                        if let Err(err) = encoder.encode_image(&img){
-                            println!("jpg 编码失败:{err:?}");
+                    OutputTarget::Wifi { .. } => {
+                        match &config.format{
+                            ImageFormat::Rgb565Lz4Compressed | ImageFormat::RGB565 => {
+                                let out = rgb888_to_rgb565_be(&img, img.width() as usize, img.height() as usize);
+                                lz4_flex::compress_prepend_size(&out)
+                            }
+                            ImageFormat::JPG(quality) => {
+                                let mut out = vec![];
+                                let mut encoder = JpegEncoder::new_with_quality(&mut out, *quality);
+                                if let Err(err) = encoder.encode_image(&img){
+                                    println!("jpg 编码失败:{err:?}");
+                                }
+                                out
+                            }
+                            ImageFormat::GIF | ImageFormat::PNG => {
+                                let mut bytes: Vec<u8> = Vec::new();
+                                if let Err(err) = img.write_to(&mut Cursor::new(&mut bytes), image::ImageFormat::Gif){
+                                    println!("gif 编码失败:{err:?}");
+                                }
+                                bytes
+                            }
                         }
-                        out
-                    }
-                    ImageFormat::GIF | ImageFormat::PNG => {
-                        let mut bytes: Vec<u8> = Vec::new();
-                        if let Err(err) = img.write_to(&mut Cursor::new(&mut bytes), image::ImageFormat::Gif){
-                            println!("gif 编码失败:{err:?}");
-                        }
-                        bytes
                     }
                 };
     
                 println!("类型{:?}:{}ms {}bytes {}x{}", config.format, t1.elapsed().as_millis(), out.len(), img.width(), img.height());
     
                 //发送
-                let ret1 = soc.write(tungstenite::Message::Binary(out.into()));
-                let ret2 = soc.flush();
-                if ret1.is_err() && ret2.is_err(){
+                let send_ok = match &config.target {
+                    OutputTarget::Wifi { .. } => {
+                        let soc = socket.as_mut().unwrap();
+                        let ret1 = soc.write(tungstenite::Message::Binary(out.into()));
+                        let ret2 = soc.flush();
+                        !(ret1.is_err() && ret2.is_err())
+                    }
+                    OutputTarget::UsbSerial { .. } => {
+                        match serial_port.as_mut() {
+                            Some(p) => usb_serial::send_lz4_rgb565_frame(
+                                p.as_mut(),
+                                0,
+                                0,
+                                config.display_config.rotated_width as u16,
+                                config.display_config.rotated_height as u16,
+                                &out,
+                            )
+                            .is_ok(),
+                            None => false,
+                        }
+                    }
+                };
+                if !send_ok {
                     recorder.websocket_status = Status::Disconnected;
                     let _ = socket.take();
+                    let _ = serial_port.take();
                     sleep_duration = Duration::from_millis(3000);
                     continue;
                 }
@@ -270,7 +344,8 @@ fn find_monitor(width: i32, height: i32) -> Option<Monitor>{
     };
     let mut find_monitor = None;
     for m in monitors{
-        if m.width() as i32 == width && m.height() as i32 == height{
+        println!("检测显示器:{}x{}", m.width().unwrap_or(0), m.height().unwrap_or(0));
+        if m.width().unwrap_or(0) as i32 == width && m.height().unwrap_or(0) as i32 == height{
             find_monitor = Some(m);
             break;
         }

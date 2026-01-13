@@ -4,12 +4,12 @@ version = "1.0.1"
 edition = "2021"
 
 [dependencies]
-xcap = "0.2.2"
+xcap = "0.8.1"
 anyhow = "1"
 image = { version = "=0.25.5", default-features = false, features = ["jpeg", "gif"]}
 tao = "0.31.1"
 tray-icon = "0.19.2"
-slint = "1.9.2"
+slint = "1.14.1"
 rfd = "0.15.2"
 rust-ini = "0.21"
 mouse_position = "0.1.4"
@@ -22,6 +22,7 @@ tungstenite = "0.26.1"
 uuid = { version = "1.12.0", features = ["v4"]}
 lz4_flex = "0.11.3"
 fast_image_resize = "5.1.1"
+serialport = "4.3.0"
 
 [build-dependencies]
 winresource = "0.1.19"
