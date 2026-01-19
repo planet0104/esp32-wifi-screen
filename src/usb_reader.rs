@@ -182,70 +182,82 @@ pub fn start_with_sender(sender: Option<Sender<String>>) {
                                 frame_start_time = None;
                                 
                                 let compressed_len = pos;
-                                let compressed_data = image_buf[..compressed_len].to_vec();
-                                let remainder_start = pos + bb_bytes.len();
-                                let remainder = image_buf[remainder_start..].to_vec();
-                                image_buf.clear();
-                                buf.extend_from_slice(&remainder);
                                 // 计算压缩率（调试信息）
                                 let compression_ratio = if compressed_len > 0 {
                                     (image_width as usize * image_height as usize * 2) as f32 / compressed_len as f32
                                 } else { 0.0 };
                                 send_debug(&sender, format!("FRAME_RECV;compressed={};ratio={:.1}\n", compressed_len, compression_ratio));
                                 
-                                match lz4_flex::decompress_size_prepended(&compressed_data) {
-                                    Ok(decompressed) => {
-                                        let expected = image_width as usize * image_height as usize * 2;
-                                        send_debug(&sender, format!("LZ4_OK;decompressed={};expected={}\n", decompressed.len(), expected));
-                                        if decompressed.len() != expected {
-                                            let _ = send_error(&sender, format!("SIZE_MISMATCH;decompressed={};expected={}\n", decompressed.len(), expected));
-                                        } else {
-                                            // 记录绘制开始时间
-                                            let draw_start = std::time::Instant::now();
-                                            send_debug(&sender, format!("DRAW_START;x={};y={};w={};h={};bytes={}\n", 
-                                                image_x, image_y, image_width, image_height, decompressed.len()));
-                                            
-                                            let draw_result = std::panic::catch_unwind(|| {
-                                                with_context(|ctx| {
-                                                    if let Some(display_manager) = ctx.display.as_mut() {
-                                                        // 获取屏幕信息用于回复（调试信息）
-                                                        let (screen_w, screen_h) = display_manager.get_screen_size();
-                                                        send_debug(&sender, format!("SCREEN_SIZE;w={};h={}\n", screen_w, screen_h));
-                                                        
-                                                        display::draw_rgb565_u8array_fast(
-                                                            display_manager,
-                                                            image_x,
-                                                            image_y,
-                                                            image_width,
-                                                            image_height,
-                                                            &decompressed,
-                                                        )
-                                                    } else { 
-                                                        let _ = send_error(&sender, "NO_DISPLAY\n".to_string());
-                                                        Ok(()) 
-                                                    }
-                                                })
-                                            });
-                                            
-                                            let draw_ms = draw_start.elapsed().as_millis();
-                                            match draw_result {
-                                                Ok(Ok(_)) => { 
-                                                    // 绘制成功（调试信息）
-                                                    send_debug(&sender, format!("DRAW_OK;x={};y={};w={};h={};ms={}\n", 
-                                                        image_x, image_y, image_width, image_height, draw_ms)); 
-                                                }
-                                                Ok(Err(e)) => { 
-                                                    let _ = send_error(&sender, format!("DRAW_FAIL;error={:?};ms={}\n", e, draw_ms)); 
-                                                }
-                                                Err(_) => { 
-                                                    let _ = send_error(&sender, format!("DRAW_PANIC;ms={}\n", draw_ms)); 
-                                                }
-                                            }
+                                // 直接使用切片解压，避免复制压缩数据，节省约150KB内存
+                                let decompressed = match lz4_flex::decompress_size_prepended(&image_buf[..compressed_len]) {
+                                    Ok(d) => d,
+                                    Err(e) => {
+                                        let _ = send_error(&sender, format!("LZ4_FAIL;error={:?}\n", e));
+                                        // 解压失败，保存remainder后清理
+                                        let remainder_start = pos + bb_bytes.len();
+                                        if remainder_start < image_buf.len() {
+                                            buf.extend_from_slice(&image_buf[remainder_start..]);
                                         }
+                                        image_buf.clear();
+                                        receiving = false;
+                                        continue;
                                     }
-                                    Err(e) => { let _ = send_error(&sender, format!("LZ4_FAIL;error={:?}\n", e)); }
+                                };
+                                
+                                // 解压成功后，先保存remainder再清理image_buf
+                                let remainder_start = pos + bb_bytes.len();
+                                if remainder_start < image_buf.len() {
+                                    buf.extend_from_slice(&image_buf[remainder_start..]);
                                 }
                                 image_buf.clear();
+                                
+                                let expected = image_width as usize * image_height as usize * 2;
+                                send_debug(&sender, format!("LZ4_OK;decompressed={};expected={}\n", decompressed.len(), expected));
+                                if decompressed.len() != expected {
+                                    let _ = send_error(&sender, format!("SIZE_MISMATCH;decompressed={};expected={}\n", decompressed.len(), expected));
+                                } else {
+                                    // 记录绘制开始时间
+                                    let draw_start = std::time::Instant::now();
+                                    send_debug(&sender, format!("DRAW_START;x={};y={};w={};h={};bytes={}\n", 
+                                        image_x, image_y, image_width, image_height, decompressed.len()));
+                                    
+                                    let draw_result = std::panic::catch_unwind(|| {
+                                        with_context(|ctx| {
+                                            if let Some(display_manager) = ctx.display.as_mut() {
+                                                // 获取屏幕信息用于回复（调试信息）
+                                                let (screen_w, screen_h) = display_manager.get_screen_size();
+                                                send_debug(&sender, format!("SCREEN_SIZE;w={};h={}\n", screen_w, screen_h));
+                                                
+                                                display::draw_rgb565_u8array_fast(
+                                                    display_manager,
+                                                    image_x,
+                                                    image_y,
+                                                    image_width,
+                                                    image_height,
+                                                    &decompressed,
+                                                )
+                                            } else { 
+                                                let _ = send_error(&sender, "NO_DISPLAY\n".to_string());
+                                                Ok(()) 
+                                            }
+                                        })
+                                    });
+                                    
+                                    let draw_ms = draw_start.elapsed().as_millis();
+                                    match draw_result {
+                                        Ok(Ok(_)) => { 
+                                            // 绘制成功（调试信息）
+                                            send_debug(&sender, format!("DRAW_OK;x={};y={};w={};h={};ms={}\n", 
+                                                image_x, image_y, image_width, image_height, draw_ms)); 
+                                        }
+                                        Ok(Err(e)) => { 
+                                            let _ = send_error(&sender, format!("DRAW_FAIL;error={:?};ms={}\n", e, draw_ms)); 
+                                        }
+                                        Err(_) => { 
+                                            let _ = send_error(&sender, format!("DRAW_PANIC;ms={}\n", draw_ms)); 
+                                        }
+                                    }
+                                }
                                 receiving = false;
                                 continue;
                             }
@@ -464,38 +476,52 @@ pub fn start_with_sender(sender: Option<Sender<String>>) {
                             
                             if let Some(pos) = find_subslice(&image_buf, &bb_bytes) {
                                 frame_start_time = None;
-                                let compressed_data = image_buf[..pos].to_vec();
-                                let remainder = image_buf[pos + bb_bytes.len()..].to_vec();
-                                image_buf.clear();
-                                buf.extend_from_slice(&remainder);
+                                let compressed_len = pos;
                                 
-                                send_debug(&sender, format!("FRAME_RECV;len={}\n", compressed_data.len()));
+                                send_debug(&sender, format!("FRAME_RECV;len={}\n", compressed_len));
                                 
-                                match lz4_flex::decompress_size_prepended(&compressed_data) {
-                                    Ok(decompressed) => {
-                                        let expected = image_width as usize * image_height as usize * 2;
-                                        if decompressed.len() != expected {
-                                            let _ = send_error(&sender, format!("SIZE_MISMATCH\n"));
-                                        } else {
-                                            let draw_start = std::time::Instant::now();
-                                            let draw_result = std::panic::catch_unwind(|| {
-                                                with_context(|ctx| {
-                                                    if let Some(dm) = ctx.display.as_mut() {
-                                                        display::draw_rgb565_u8array_fast(dm, image_x, image_y, image_width, image_height, &decompressed)
-                                                    } else { Ok(()) }
-                                                })
-                                            });
-                                            let draw_ms = draw_start.elapsed().as_millis();
-                                            match draw_result {
-                                                Ok(Ok(_)) => { send_debug(&sender, format!("DRAW_OK;ms={}\n", draw_ms)); }
-                                                Ok(Err(e)) => { let _ = send_error(&sender, format!("DRAW_FAIL;{:?}\n", e)); }
-                                                Err(_) => { let _ = send_error(&sender, "DRAW_PANIC\n".to_string()); }
-                                            }
+                                // 直接使用切片解压，避免复制压缩数据，节省约150KB内存
+                                let decompressed = match lz4_flex::decompress_size_prepended(&image_buf[..compressed_len]) {
+                                    Ok(d) => d,
+                                    Err(e) => {
+                                        let _ = send_error(&sender, format!("LZ4_FAIL;{:?}\n", e));
+                                        // 解压失败，保存remainder后清理
+                                        let remainder_start = pos + bb_bytes.len();
+                                        if remainder_start < image_buf.len() {
+                                            buf.extend_from_slice(&image_buf[remainder_start..]);
                                         }
+                                        image_buf.clear();
+                                        receiving = false;
+                                        continue;
                                     }
-                                    Err(e) => { let _ = send_error(&sender, format!("LZ4_FAIL;{:?}\n", e)); }
+                                };
+                                
+                                // 解压成功后，先保存remainder再清理image_buf
+                                let remainder_start = pos + bb_bytes.len();
+                                if remainder_start < image_buf.len() {
+                                    buf.extend_from_slice(&image_buf[remainder_start..]);
                                 }
                                 image_buf.clear();
+                                
+                                let expected = image_width as usize * image_height as usize * 2;
+                                if decompressed.len() != expected {
+                                    let _ = send_error(&sender, format!("SIZE_MISMATCH\n"));
+                                } else {
+                                    let draw_start = std::time::Instant::now();
+                                    let draw_result = std::panic::catch_unwind(|| {
+                                        with_context(|ctx| {
+                                            if let Some(dm) = ctx.display.as_mut() {
+                                                display::draw_rgb565_u8array_fast(dm, image_x, image_y, image_width, image_height, &decompressed)
+                                            } else { Ok(()) }
+                                        })
+                                    });
+                                    let draw_ms = draw_start.elapsed().as_millis();
+                                    match draw_result {
+                                        Ok(Ok(_)) => { send_debug(&sender, format!("DRAW_OK;ms={}\n", draw_ms)); }
+                                        Ok(Err(e)) => { let _ = send_error(&sender, format!("DRAW_FAIL;{:?}\n", e)); }
+                                        Err(_) => { let _ = send_error(&sender, "DRAW_PANIC\n".to_string()); }
+                                    }
+                                }
                                 receiving = false;
                                 continue;
                             }
