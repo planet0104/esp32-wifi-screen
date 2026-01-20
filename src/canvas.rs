@@ -169,6 +169,83 @@ pub struct Triangle {
     stroke_color: Option<CSSColor>,
 }
 
+/// 尝试直接将图像绘制到屏幕，跳过画布创建
+/// 这是一个内存优化函数，用于处理单一全屏图像的场景
+/// 可节省约450KB内存（320x480 RGB888画布）
+/// 
+/// 返回值：
+/// - Some(Ok(())) 表示绘制成功
+/// - Some(Err(e)) 表示绘制失败
+/// - None 表示不适合直接绘制，需要走正常画布流程
+fn try_draw_image_direct(
+    display_manager: &mut DisplayManager,
+    image_cache: &HashMap<String, ImageCache>,
+    image: &Image,
+) -> Option<Result<()>> {
+    use crate::display::{draw_rgb_image_fast, draw_rgb565_fast};
+    
+    // 处理缓存的图像
+    if let Some(key) = &image.key {
+        match image_cache.get(key) {
+            Some(ImageCache::RgbImage(img)) => {
+                log::info!("[DIRECT_DRAW] Using cached RGB image: {}", key);
+                return Some(draw_rgb_image_fast(display_manager, 0, 0, img));
+            }
+            Some(ImageCache::RgbaImage(img)) => {
+                // RGBA图像需要转换为RGB，暂时走正常流程
+                log::info!("[DIRECT_DRAW] RGBA image needs conversion, using canvas");
+                return None;
+            }
+            None => {
+                return Some(Err(anyhow!("image key not exist:{key}")));
+            }
+        }
+    }
+    
+    // 处理base64编码的图像
+    if let Some(b64) = &image.base64 {
+        log::info!("[DIRECT_DRAW] Decoding base64 image directly to screen");
+        
+        // 解码base64
+        let image_data = match decode_base64(b64.as_str()) {
+            Ok(d) => d,
+            Err(e) => return Some(Err(e)),
+        };
+        
+        let mime = mimetype::detect(&image_data);
+        
+        if mime.extension.ends_with("jpg") || mime.extension.ends_with("jpeg") {
+            // JPEG直接解码为RGB565并绘制，节省大量内存
+            log::info!("[DIRECT_DRAW] Decoding JPEG to RGB565 and drawing");
+            match decode_jpeg_to_rgb565(&image_data) {
+                Ok((w, h, rgb565_data)) => {
+                    return Some(draw_rgb565_fast(display_manager, 0, 0, w, h, &rgb565_data));
+                }
+                Err(e) => {
+                    log::warn!("[DIRECT_DRAW] JPEG decode failed, falling back to canvas: {:?}", e);
+                    return None;
+                }
+            }
+        } else {
+            // PNG/GIF等格式，解码后直接绘制
+            log::info!("[DIRECT_DRAW] Decoding PNG/GIF to RGB and drawing");
+            match image::load_from_memory(&image_data) {
+                Ok(img) => {
+                    let rgb_img = img.to_rgb8();
+                    return Some(draw_rgb_image_fast(display_manager, 0, 0, &rgb_img));
+                }
+                Err(e) => {
+                    log::warn!("[DIRECT_DRAW] Image decode failed: {:?}", e);
+                    return Some(Err(anyhow!("decode image: {:?}", e)));
+                }
+            }
+        }
+    }
+    
+    // 没有key也没有base64，返回错误
+    Some(Err(anyhow!("请填写图像的\"key\"或者\"base64\"字符串")))
+}
+
 pub fn draw_elements(
     display_manager: &mut DisplayManager,
     image_cache: &HashMap<String, ImageCache>,
@@ -176,6 +253,19 @@ pub fn draw_elements(
 ) -> Result<()> {
     let (width, height) = display_manager.get_screen_size();
     let (width, height) = (width as u32, height as u32);
+
+    // 优化：检测是否是单一全屏图像，如果是则直接绘制到屏幕，跳过画布创建
+    // 这样可以节省约450KB内存（320x480 RGB888画布）
+    if elements.len() == 1 {
+        if let Element::Image(image) = &elements[0] {
+            if image.x == 0 && image.y == 0 {
+                // 尝试直接绘制，不创建中间画布
+                if let Some(result) = try_draw_image_direct(display_manager, image_cache, image) {
+                    return result;
+                }
+            }
+        }
+    }
 
     let mut canvas =  Box::new(RgbImage::new(width, height));
 

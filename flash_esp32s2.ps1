@@ -138,6 +138,30 @@ Write-Host "Using port: $selectPort" -ForegroundColor Cyan
 
 $tool = ".\esptool.exe"
 
+# ESP32-S2使用原生USB-OTG，操作后需要等待设备重新枚举
+function Wait-ForPort {
+    param(
+        [string]$TargetPort,
+        [int]$TimeoutSeconds = 15
+    )
+    $elapsed = 0
+    $sleepMs = 500
+    Write-Host "Waiting for port $TargetPort to become available..." -ForegroundColor Cyan
+    while ($elapsed -lt $TimeoutSeconds) {
+        Start-Sleep -Milliseconds $sleepMs
+        $elapsed += ($sleepMs / 1000)
+        $ports = [System.IO.Ports.SerialPort]::GetPortNames()
+        if ($ports -contains $TargetPort) {
+            # 额外等待端口稳定
+            Start-Sleep -Milliseconds 500
+            Write-Host "Port $TargetPort is available." -ForegroundColor Green
+            return $true
+        }
+    }
+    Write-Host "Timeout waiting for port $TargetPort" -ForegroundColor Yellow
+    return $false
+}
+
 # 默认要保留的分区名片段（不区分大小写），可按需调整
 $preserveNames = @('nvs','storage','spiffs','fat','littlefs','filesystem','ota','data')
 $preserveBackups = @()
@@ -159,9 +183,10 @@ if (Test-Path $partitionsCsv) {
                     }
                     $backupFile = Join-Path $PSScriptRoot ("preserve_{0}.bin" -f $pname)
                     Write-Host ("Backing up partition '{0}' offset {1} size {2} -> {3}" -f $pname,$poffset,$psize,$backupFile) -ForegroundColor Yellow
+                    # ESP32-S2使用no_reset避免USB断开
                     $procInfo = New-Object System.Diagnostics.ProcessStartInfo
                     $procInfo.FileName = $tool
-                    $procInfo.Arguments = ('-p {0} --before default_reset --after hard_reset --chip {1} read_flash {2} {3} {4}' -f $selectPort,$chip,$poffset,$psize,$backupFile)
+                    $procInfo.Arguments = ('-p {0} --before default_reset --after no_reset --chip {1} read_flash {2} {3} {4}' -f $selectPort,$chip,$poffset,$psize,$backupFile)
                     $procInfo.RedirectStandardOutput = $true
                     $procInfo.RedirectStandardError = $true
                     $procInfo.UseShellExecute = $false
@@ -177,6 +202,8 @@ if (Test-Path $partitionsCsv) {
                     } else {
                         $preserveBackups += @{ name = $pname; offset = $poffset; file = $backupFile }
                     }
+                    # 等待端口稳定
+                    Start-Sleep -Milliseconds 300
                     break
                 }
             }
@@ -187,12 +214,16 @@ if (Test-Path $partitionsCsv) {
 }
 
 Write-Host "Flashing merged image (bootloader, partition and app) to 0x0..." -ForegroundColor Cyan
-& $tool -p $selectPort --before default_reset --after hard_reset --chip $chip write_flash --flash_mode dio --flash_size 4MB 0x0 $binOutputPath
+# 使用 --no-compress 避免压缩写入错误
+& $tool -p $selectPort --before default_reset --after no_reset --chip $chip write_flash --no-compress --flash_mode dio --flash_size 4MB 0x0 $binOutputPath
 
 if ($LASTEXITCODE -ne 0) {
     Write-Host "Flashing failed!" -ForegroundColor Red
     exit 1
 }
+
+# 等待设备稳定
+Start-Sleep -Milliseconds 500
 
 # 恢复备份的分区
 foreach ($b in $preserveBackups) {
@@ -202,9 +233,10 @@ foreach ($b in $preserveBackups) {
         if ($resolved) { $roffset = $resolved.offset }
     }
     Write-Host ("Restoring partition '{0}' from {1} to offset {2}..." -f $b.name,$b.file,$roffset) -ForegroundColor Yellow
+    # 使用no_reset避免每次恢复后USB断开
     $procInfo = New-Object System.Diagnostics.ProcessStartInfo
     $procInfo.FileName = $tool
-    $procInfo.Arguments = ('-p {0} --before default_reset --after hard_reset --chip {1} write_flash {2} {3}' -f $selectPort,$chip,$roffset,$b.file)
+    $procInfo.Arguments = ('-p {0} --before default_reset --after no_reset --chip {1} write_flash --no-compress {2} {3}' -f $selectPort,$chip,$roffset,$b.file)
     $procInfo.RedirectStandardOutput = $true
     $procInfo.RedirectStandardError = $true
     $procInfo.UseShellExecute = $false
@@ -218,6 +250,19 @@ foreach ($b in $preserveBackups) {
         Write-Host $out
         if ($err) { Write-Host $err }
     }
+    # 等待设备稳定
+    Start-Sleep -Milliseconds 300
+}
+
+# 所有操作完成后执行硬复位启动设备
+Write-Host "Performing hard reset to boot the device..." -ForegroundColor Cyan
+& $tool -p $selectPort --before default_reset --after hard_reset --chip $chip read_mac 2>$null | Out-Null
+Start-Sleep -Milliseconds 1000
+
+# 等待端口重新枚举
+$portReady = Wait-ForPort -TargetPort $selectPort -TimeoutSeconds 15
+if (-not $portReady) {
+    Write-Host "Warning: Port not available after reset, monitor may fail." -ForegroundColor Yellow
 }
 
 Write-Host "Flashing completed!" -ForegroundColor Green

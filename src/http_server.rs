@@ -1176,23 +1176,35 @@ pub fn print_memory(tag: &str){
 fn handle_draw_canvas(
     req: &mut esp_idf_svc::http::server::Request<&mut EspHttpConnection<'_>>,
 ) -> Result<()> {
-    // 检查内存是否足够（至少需要500KB处理base64图片）
-    let free_heap = unsafe { esp_get_free_heap_size() } as usize;
-    const MIN_REQUIRED_HEAP: usize = 500 * 1024;
-    
-    if free_heap < MIN_REQUIRED_HEAP {
-        return Err(anyhow!("内存不足，拒绝/draw_canvas请求 (free_heap: {} KB，需要至少 {} KB)", free_heap / 1024, MIN_REQUIRED_HEAP / 1024));
-    }
-    
     let len = req.content_len().unwrap_or(0) as usize;
     if len > MAX_HTTP_PAYLOAD_LEN {
         return Err(anyhow!("http请求体不能超过{MAX_HTTP_PAYLOAD_LEN}字节"));
     }
+    
+    // 根据请求大小动态计算所需内存
+    // 小请求：可能只是简单图形，需要较少内存
+    // 大请求：可能包含base64图像，但现在有直接绘制优化，需要的内存减少了
+    let free_heap = unsafe { esp_get_free_heap_size() } as usize;
+    let min_required = if len > 100 * 1024 {
+        // 大请求（可能包含base64图像）：需要请求大小 + 解压/解码缓冲 + 100KB安全余量
+        // 由于优化了直接绘制路径，不再需要450KB的画布内存
+        len + 150 * 1024
+    } else {
+        // 小请求：需要画布内存（取决于屏幕大小）+ 100KB安全余量
+        200 * 1024
+    };
+    
+    if free_heap < min_required {
+        return Err(anyhow!("内存不足 (free_heap: {} KB，需要: {} KB)", 
+            free_heap / 1024, min_required / 1024));
+    }
+    
     let mut data = Box::new(vec![0; len]);
     req.read_exact(&mut data)?;
 
+    // 使用较小的栈大小，因为主要内存都在堆上分配
     if let Err(err) = std::thread::Builder::new()
-    .stack_size(18*1024)
+    .stack_size(12*1024)  // 从18KB降低到12KB，节省6KB栈内存
     .spawn(move ||{
         if let Err(err) = with_context(move |ctx|{
             let json = unsafe{ str::from_boxed_utf8_unchecked(data.as_slice().into()) };
