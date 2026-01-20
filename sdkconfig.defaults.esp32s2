@@ -96,6 +96,9 @@ CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ=240
 # Enable WebSocket support
 CONFIG_HTTPD_WS_SUPPORT=y
 
+# Reduce httpd log level to ERROR only (suppress WARN messages)
+CONFIG_HTTPD_LOG_LEVEL_ERROR=y
+
 # Increase max request header length for browser compatibility
 CONFIG_HTTPD_MAX_REQ_HDR_LEN=2048
 

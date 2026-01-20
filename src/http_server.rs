@@ -19,9 +19,147 @@ use esp_idf_svc::{
 
 use image::{codecs::png::PngEncoder, ImageEncoder};
 use log::*;
+use once_cell::sync::Lazy;
 use url::Url;
 
 use crate::{canvas, config, display::{self, check_screen_size}, with_context, with_context1, Context, ImageCache, MAX_HTTP_PAYLOAD_LEN, STACK_SIZE};
+
+// WiFi帧差分协议 Magic Numbers (8字节)
+const WIFI_KEY_MAGIC: &[u8; 8] = b"wflz4ke_"; // lz4压缩的关键帧(完整RGB565)
+const WIFI_DLT_MAGIC: &[u8; 8] = b"wflz4dl_"; // lz4压缩的差分帧(XOR差分数据)
+const WIFI_NOP_MAGIC: &[u8; 8] = b"wflz4no_"; // 无变化帧(屏幕静止，跳过绘制)
+
+// WiFi帧差分解码器 (全局单例，用于WebSocket接收)
+// 用于在ESP32端对接收的帧差分数据进行解码
+// 注意: 为了节省内存，解码后返回对内部缓冲区的引用，调用者需要在锁持有期间使用数据
+struct DeltaDecoder {
+    prev_frame: Vec<u8>,  // 上一帧RGB565数据 (存储在PSRAM)
+    error_count: u32,     // 错误计数(用于限制日志频率)
+    last_error: Option<&'static str>, // 上一次错误类型
+}
+
+impl DeltaDecoder {
+    fn new() -> Self {
+        Self {
+            prev_frame: Vec::new(),
+            error_count: 0,
+            last_error: None,
+        }
+    }
+
+    // 检查是否有参考帧
+    fn has_reference_frame(&self) -> bool {
+        !self.prev_frame.is_empty()
+    }
+
+    // 记录错误(限制日志频率)
+    fn log_error(&mut self, err: &'static str) {
+        // 只在错误类型变化或每100次时记录
+        if self.last_error != Some(err) || self.error_count % 100 == 0 {
+            if self.error_count > 1 && self.last_error == Some(err) {
+                warn!("wifi frame: {} (x{})", err, self.error_count);
+            } else {
+                warn!("wifi frame: {}", err);
+            }
+            self.error_count = 1;
+        } else {
+            self.error_count += 1;
+        }
+        self.last_error = Some(err);
+    }
+
+    // 重置错误计数
+    fn clear_error(&mut self) {
+        if self.error_count > 1 {
+            if let Some(err) = self.last_error {
+                info!("wifi frame: recovered after {} errors ({})", self.error_count, err);
+            }
+        }
+        self.error_count = 0;
+        self.last_error = None;
+    }
+
+    // lz4解压辅助函数 (比zstd快5-10倍)
+    fn lz4_decompress(lz4_data: &[u8]) -> Result<Vec<u8>, &'static str> {
+        lz4_flex::decompress_size_prepended(lz4_data)
+            .map_err(|_| "lz4 decompress failed")
+    }
+
+    // 解码关键帧 (lz4压缩的完整RGB565)
+    fn decode_key_frame(&mut self, lz4_data: &[u8]) -> Result<&[u8], &'static str> {
+        let decompressed = Self::lz4_decompress(lz4_data)?;
+        self.prev_frame = decompressed;
+        self.clear_error();
+        Ok(&self.prev_frame)
+    }
+
+    // 解码差分帧 (lz4压缩的XOR差分数据)
+    // 返回: (解码后数据引用, lz4解压耗时ms, xor耗时ms)
+    fn decode_delta_frame_timed(&mut self, lz4_data: &[u8]) -> Result<(&[u8], u128, u128), &'static str> {
+        if self.prev_frame.is_empty() {
+            return Err("no reference frame");
+        }
+        
+        // LZ4解压计时
+        let lz4_start = Instant::now();
+        let delta = Self::lz4_decompress(lz4_data)?;
+        let lz4_ms = lz4_start.elapsed().as_millis();
+        
+        if delta.len() != self.prev_frame.len() {
+            return Err("delta size mismatch");
+        }
+        
+        // XOR计时
+        let xor_start = Instant::now();
+        
+        // 使用u32批量XOR加速 (ESP32是32位CPU)
+        let len = self.prev_frame.len();
+        let chunks = len / 4;
+        let remainder = len % 4;
+        
+        // 批量处理4字节
+        let prev_u32: &mut [u32] = unsafe {
+            std::slice::from_raw_parts_mut(self.prev_frame.as_mut_ptr() as *mut u32, chunks)
+        };
+        let delta_u32: &[u32] = unsafe {
+            std::slice::from_raw_parts(delta.as_ptr() as *const u32, chunks)
+        };
+        for (p, d) in prev_u32.iter_mut().zip(delta_u32.iter()) {
+            *p ^= *d;
+        }
+        
+        // 处理剩余字节
+        if remainder > 0 {
+            let start = chunks * 4;
+            for i in 0..remainder {
+                self.prev_frame[start + i] ^= delta[start + i];
+            }
+        }
+        
+        let xor_ms = xor_start.elapsed().as_millis();
+        
+        self.clear_error();
+        Ok((&self.prev_frame, lz4_ms, xor_ms))
+    }
+    
+    // 解码差分帧 (兼容旧接口)
+    fn decode_delta_frame(&mut self, lz4_data: &[u8]) -> Result<&[u8], &'static str> {
+        self.decode_delta_frame_timed(lz4_data).map(|(data, _, _)| data)
+    }
+
+    // 重置解码器状态
+    fn reset(&mut self) {
+        self.prev_frame.clear();
+        self.prev_frame.shrink_to_fit();
+        self.error_count = 0;
+        self.last_error = None;
+    }
+}
+
+// 全局帧差分解码器实例
+static DELTA_DECODER: Lazy<Mutex<DeltaDecoder>> = Lazy::new(|| {
+    Mutex::new(DeltaDecoder::new())
+});
 
 pub fn start_http_server() -> Result<()>{
     let mut server = create_server()?;
@@ -937,6 +1075,11 @@ pub fn start_http_server() -> Result<()>{
             if ws.is_new() {
                 info!("New WebSocket session... (free_heap: {} bytes)", free_heap);
                 
+                // 新连接时重置帧差分解码器，等待客户端发送关键帧
+                if let Ok(mut decoder) = DELTA_DECODER.lock() {
+                    decoder.reset();
+                }
+                
                 // 内存低时拒绝新连接
                 if free_heap < MIN_SAFE_HEAP {
                     warn!("内存不足，拒绝新 WebSocket 连接 (free_heap: {} bytes)", free_heap);
@@ -948,6 +1091,10 @@ pub fn start_http_server() -> Result<()>{
                 ws.send(FrameType::Text(false), "Welcome".as_bytes())?;
                 return Ok(());
             } else if ws.is_closed() {
+                // 连接关闭时也重置解码器
+                if let Ok(mut decoder) = DELTA_DECODER.lock() {
+                    decoder.reset();
+                }
                 return Ok(());
             }
     
@@ -1044,10 +1191,87 @@ pub fn start_http_server() -> Result<()>{
                                 }
                             }else {
                                 if data.as_ref().starts_with(b"RGB565"){
+                                    // 未压缩的RGB565数据(带RGB565前缀)
                                     let rgb565 = &data.as_ref()[6..];
                                     display::draw_rgb565_u8array_fast(display_manager, 0, 0, display_manager.get_screen_width(), display_manager.get_screen_height(), rgb565)?;
-                                }else{
-                                    //lz4压缩数据
+                                } else if data.as_ref().starts_with(WIFI_NOP_MAGIC) {
+                                    // 无变化帧：画面静止，跳过解码和绘制，直接返回ACK
+                                    // 这样上位机可以立即发送下一帧，大幅提升静止画面的响应速度
+                                    let _ = ws.send(FrameType::Text(false), b"ACK");
+                                } else if data.as_ref().starts_with(WIFI_KEY_MAGIC) || data.as_ref().starts_with(WIFI_DLT_MAGIC) {
+                                    // WiFi帧差分协议处理 (带ACK确认机制)
+                                    let is_key_frame = data.as_ref().starts_with(WIFI_KEY_MAGIC);
+                                    let frame_type = if is_key_frame { "KEY" } else { "DLT" };
+                                    
+                                    if data.len() >= 12 {
+                                        let width = u16::from_be_bytes([data[8], data[9]]);
+                                        let height = u16::from_be_bytes([data[10], data[11]]);
+                                        let lz4_data = &data[12..];
+                                        
+                                        if let Ok(mut decoder) = DELTA_DECODER.lock() {
+                                            // 差分帧但没有参考帧时，等待关键帧
+                                            if !is_key_frame && !decoder.has_reference_frame() {
+                                                decoder.log_error("waiting for key frame");
+                                                // 发送NACK让客户端发送关键帧
+                                                let _ = ws.send(FrameType::Text(false), b"NACK");
+                                            } else {
+                                                // 解码计时
+                                                let decode_start = Instant::now();
+                                                
+                                                // 使用带计时的解码函数
+                                                let (decode_result, lz4_ms, xor_ms) = if is_key_frame {
+                                                    match decoder.decode_key_frame(lz4_data) {
+                                                        Ok(data) => (Ok(data), 0u128, 0u128),
+                                                        Err(e) => (Err(e), 0, 0),
+                                                    }
+                                                } else {
+                                                    match decoder.decode_delta_frame_timed(lz4_data) {
+                                                        Ok((data, lz4, xor)) => (Ok(data), lz4, xor),
+                                                        Err(e) => (Err(e), 0, 0),
+                                                    }
+                                                };
+                                                
+                                                let decode_ms = decode_start.elapsed().as_millis();
+                                                
+                                                match decode_result {
+                                                    Ok(rgb565) => {
+                                                        let expected_size = width as usize * height as usize * 2;
+                                                        if rgb565.len() >= expected_size {
+                                                            // 绘制计时
+                                                            let draw_start = Instant::now();
+                                                            let _ = display::draw_rgb565_u8array_fast(
+                                                                display_manager, 0, 0, width, height, 
+                                                                &rgb565[0..expected_size]
+                                                            );
+                                                            let draw_ms = draw_start.elapsed().as_millis();
+                                                            
+                                                            // 打印性能信息 (包含lz4和xor细分)
+                                                            // if is_key_frame {
+                                                            //     info!("[WIFI_FRAME] type={} {}x{} compressed={}bytes decode={}ms draw={}ms total={}ms",
+                                                            //         frame_type, width, height, lz4_data.len(),
+                                                            //         decode_ms, draw_ms, decode_ms + draw_ms);
+                                                            // } else {
+                                                            //     info!("[WIFI_FRAME] type={} {}x{} compressed={}bytes decode={}ms(lz4={}ms,xor={}ms) draw={}ms total={}ms",
+                                                            //         frame_type, width, height, lz4_data.len(),
+                                                            //         decode_ms, lz4_ms, xor_ms, draw_ms, decode_ms + draw_ms);
+                                                            // }
+                                                            
+                                                            // 发送ACK确认，客户端收到后才发送下一帧
+                                                            let _ = ws.send(FrameType::Text(false), b"ACK");
+                                                        }
+                                                    }
+                                                    Err(e) => {
+                                                        decoder.log_error(e);
+                                                        decoder.reset();
+                                                        // 发送NACK让客户端发送关键帧
+                                                        let _ = ws.send(FrameType::Text(false), b"NACK");
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                } else {
+                                    // 兼容旧协议: lz4压缩数据
                                     match lz4_flex::decompress_size_prepended(&data){
                                         Ok(rgb565) => {
                                             let rgb565 = &rgb565[0..display_manager.get_screen_width() as usize
@@ -1724,6 +1948,17 @@ fn handle_display_config(
 }
 
 fn create_server() -> anyhow::Result<EspHttpServer<'static>> {
+    // 禁用httpd相关模块的警告日志 (减少断开连接时的日志刷屏)
+    unsafe {
+        use std::ffi::CString;
+        let tags = ["httpd_ws", "httpd_txrx", "httpd", "httpd_parse"];
+        for tag in tags {
+            let tag_cstr = CString::new(tag).unwrap();
+            // ESP_LOG_NONE = 0, ESP_LOG_ERROR = 1
+            esp_idf_hal::sys::esp_log_level_set(tag_cstr.as_ptr(), esp_idf_hal::sys::esp_log_level_t_ESP_LOG_ERROR);
+        }
+    }
+    
     let server_configuration = esp_idf_svc::http::server::Configuration {
         stack_size: STACK_SIZE,
         // Increase max open sockets for better concurrent request handling

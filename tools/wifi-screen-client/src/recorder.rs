@@ -2,7 +2,7 @@
 
 //结束录屏
 
-use std::{io::Cursor, net::TcpStream, sync::{Arc, Mutex}, time::{Duration, Instant}};
+use std::{io::{Cursor, Write}, net::TcpStream, sync::{Arc, Mutex}, time::{Duration, Instant}};
 use anyhow::{anyhow, Result};
 use fast_image_resize::{images::Image, Resizer};
 use image::{buffer::ConvertBuffer, codecs::jpeg::JpegEncoder, RgbImage, RgbaImage};
@@ -12,6 +12,121 @@ use tungstenite::{stream::MaybeTlsStream, WebSocket};
 use xcap::Monitor;
 
 use crate::{rgb565::rgb888_to_rgb565_be, show_alert_async, usb_serial, DisplayConfig};
+
+// WiFi帧差分协议 Magic Numbers (8字节)
+// 格式: MAGIC(8) + WIDTH(2) + HEIGHT(2) + LZ4_COMPRESSED_DATA
+const WIFI_KEY_MAGIC: &[u8; 8] = b"wflz4ke_"; // lz4压缩的关键帧(完整RGB565)
+const WIFI_DLT_MAGIC: &[u8; 8] = b"wflz4dl_"; // lz4压缩的差分帧(XOR差分数据)
+const WIFI_NOP_MAGIC: &[u8; 8] = b"wflz4no_"; // 无变化帧(屏幕静止，跳过绘制)
+
+// 无变化帧阈值：压缩后小于此大小认为画面没变化
+const NO_CHANGE_THRESHOLD: usize = 200;
+
+// WiFi帧差分编码器
+// 用于在上位机端对RGB565数据进行帧差分+lz4压缩
+pub struct DeltaEncoder {
+    prev_frame: Vec<u8>,       // 上一帧RGB565数据
+    frame_count: u32,          // 帧计数
+    key_frame_interval: u32,   // 关键帧间隔(默认60帧)
+}
+
+impl DeltaEncoder {
+    pub fn new(key_frame_interval: u32) -> Self {
+        Self {
+            prev_frame: Vec::new(),
+            frame_count: 0,
+            key_frame_interval,
+        }
+    }
+
+    // 编码一帧RGB565数据
+    // 返回: (编码后的数据, 是否为关键帧)
+    pub fn encode(&mut self, rgb565_data: &[u8], width: u16, height: u16) -> (Vec<u8>, bool) {
+        let need_key_frame = self.prev_frame.len() != rgb565_data.len()
+            || self.frame_count == 0
+            || self.frame_count % self.key_frame_interval == 0;
+
+        if need_key_frame {
+            // 关键帧: 直接压缩完整数据
+            let compressed = self.lz4_compress(rgb565_data);
+            
+            // 构建帧数据: MAGIC + WIDTH + HEIGHT + COMPRESSED_DATA
+            let mut frame = Vec::with_capacity(12 + compressed.len());
+            frame.extend_from_slice(WIFI_KEY_MAGIC);
+            frame.extend_from_slice(&width.to_be_bytes());
+            frame.extend_from_slice(&height.to_be_bytes());
+            frame.extend_from_slice(&compressed);
+            
+            // 保存当前帧作为参考帧
+            self.prev_frame = rgb565_data.to_vec();
+            self.frame_count = self.frame_count.wrapping_add(1);
+            
+            (frame, true)
+        } else {
+            // 差分帧: 计算XOR差分并压缩
+            let delta: Vec<u8> = rgb565_data.iter()
+                .zip(self.prev_frame.iter())
+                .map(|(curr, prev)| curr ^ prev)
+                .collect();
+            
+            let compressed_delta = self.lz4_compress(&delta);
+            
+            // 如果压缩后数据很小，说明画面几乎没变化，发送无变化帧
+            if compressed_delta.len() < NO_CHANGE_THRESHOLD {
+                // 发送无变化帧，ESP32收到后直接返回ACK，不做解码和绘制
+                let mut frame = Vec::with_capacity(12);
+                frame.extend_from_slice(WIFI_NOP_MAGIC);
+                frame.extend_from_slice(&width.to_be_bytes());
+                frame.extend_from_slice(&height.to_be_bytes());
+                
+                // 不更新参考帧和计数（画面没变）
+                self.frame_count = self.frame_count.wrapping_add(1);
+                
+                (frame, false)
+            } else {
+                let compressed_key = self.lz4_compress(rgb565_data);
+                
+                // 如果差分帧比关键帧还大，使用关键帧
+                if compressed_delta.len() >= compressed_key.len() {
+                    let mut frame = Vec::with_capacity(12 + compressed_key.len());
+                    frame.extend_from_slice(WIFI_KEY_MAGIC);
+                    frame.extend_from_slice(&width.to_be_bytes());
+                    frame.extend_from_slice(&height.to_be_bytes());
+                    frame.extend_from_slice(&compressed_key);
+                    
+                    self.prev_frame = rgb565_data.to_vec();
+                    self.frame_count = self.frame_count.wrapping_add(1);
+                    
+                    (frame, true)
+                } else {
+                    // 使用差分帧
+                    let mut frame = Vec::with_capacity(12 + compressed_delta.len());
+                    frame.extend_from_slice(WIFI_DLT_MAGIC);
+                    frame.extend_from_slice(&width.to_be_bytes());
+                    frame.extend_from_slice(&height.to_be_bytes());
+                    frame.extend_from_slice(&compressed_delta);
+                    
+                    // 更新参考帧
+                    self.prev_frame = rgb565_data.to_vec();
+                    self.frame_count = self.frame_count.wrapping_add(1);
+                    
+                    (frame, false)
+                }
+            }
+        }
+    }
+
+    // 重置编码器状态
+    pub fn reset(&mut self) {
+        self.prev_frame.clear();
+        self.frame_count = 0;
+    }
+
+    // lz4压缩 (比zstd解压快5-10倍)
+    fn lz4_compress(&self, data: &[u8]) -> Vec<u8> {
+        lz4_flex::compress_prepend_size(data)
+    }
+}
 
 #[allow(unused)]
 #[derive(Debug, Clone)]
@@ -25,7 +140,7 @@ pub enum ImageFormat{
 
 impl Default for ImageFormat{
     fn default() -> Self {
-        ImageFormat::JPG(30)
+        ImageFormat::RGB565
     }
 }
 
@@ -109,6 +224,9 @@ fn run_recorder(recorder: Arc<Mutex<Recorder>>) -> !{
 
     let mut sleep_duration = Duration::from_millis(3000);
     
+    // WiFi帧差分编码器 (关键帧间隔60帧)
+    let mut delta_encoder = DeltaEncoder::new(60);
+    
     loop{
         //尝试锁定，锁定失败延迟
         // println!("recorder loop...");
@@ -144,6 +262,8 @@ fn run_recorder(recorder: Arc<Mutex<Recorder>>) -> !{
                             recorder.websocket_status = Status::Disconnected;
                             let _ = socket.take();
                             server_ip = ip.clone();
+                            // 重置帧差分编码器，确保重新连接后发送关键帧
+                            delta_encoder.reset();
                             println!("更新了IP:{server_ip}...");
                             sleep_duration = Duration::from_millis(3000);
                             continue;
@@ -267,46 +387,97 @@ fn run_recorder(recorder: Arc<Mutex<Recorder>>) -> !{
                 };
     
                 // Encode payload based on target
-                let out = match &config.target {
+                let (out, is_key_frame) = match &config.target {
                     OutputTarget::UsbSerial { .. } => {
                         // USB serial path only supports RGB565 + LZ4 (device protocol)
+                        // USB传输不使用帧差分，保持原有协议不变
                         let rgb565 = rgb888_to_rgb565_be(&img, img.width() as usize, img.height() as usize);
-                        lz4_flex::compress_prepend_size(&rgb565)
+                        (lz4_flex::compress_prepend_size(&rgb565), true)
                     }
                     OutputTarget::Wifi { .. } => {
                         match &config.format{
                             ImageFormat::Rgb565Lz4Compressed | ImageFormat::RGB565 => {
-                                let out = rgb888_to_rgb565_be(&img, img.width() as usize, img.height() as usize);
-                                lz4_flex::compress_prepend_size(&out)
+                                // 使用帧差分+lz4压缩 (WiFi传输优化)
+                                let rgb565 = rgb888_to_rgb565_be(&img, img.width() as usize, img.height() as usize);
+                                delta_encoder.encode(&rgb565, dst_width as u16, dst_height as u16)
                             }
                             ImageFormat::JPG(quality) => {
+                                // JPG格式不使用帧差分
                                 let mut out = vec![];
                                 let mut encoder = JpegEncoder::new_with_quality(&mut out, *quality);
                                 if let Err(err) = encoder.encode_image(&img){
                                     println!("jpg 编码失败:{err:?}");
                                 }
-                                out
+                                (out, true)
                             }
                             ImageFormat::GIF | ImageFormat::PNG => {
+                                // GIF/PNG格式不使用帧差分
                                 let mut bytes: Vec<u8> = Vec::new();
                                 if let Err(err) = img.write_to(&mut Cursor::new(&mut bytes), image::ImageFormat::Gif){
                                     println!("gif 编码失败:{err:?}");
                                 }
-                                bytes
+                                (bytes, true)
                             }
                         }
                     }
                 };
     
-                println!("类型{:?}:{}ms {}bytes {}x{}", config.format, t1.elapsed().as_millis(), out.len(), img.width(), img.height());
+                let frame_type = if is_key_frame { "KEY" } else { "DLT" };
+                let encode_ms = t1.elapsed().as_millis();
+                let out_bytes = out.len(); // 记录发送字节数
+                
+                // 记录发送开始时间
+                let send_start = Instant::now();
     
                 //发送
                 let send_ok = match &config.target {
                     OutputTarget::Wifi { .. } => {
                         let soc = socket.as_mut().unwrap();
+                        
+                        // 设置读取超时3秒 (用于等待ACK)
+                        if let tungstenite::stream::MaybeTlsStream::Plain(stream) = soc.get_mut() {
+                            let _ = stream.set_read_timeout(Some(Duration::from_secs(3)));
+                        }
+                        
+                        // 发送帧
                         let ret1 = soc.write(tungstenite::Message::Binary(out.into()));
                         let ret2 = soc.flush();
-                        !(ret1.is_err() && ret2.is_err())
+                        if ret1.is_err() || ret2.is_err() {
+                            false
+                        } else {
+                            // 等待ACK确认 (只对帧差分协议，即RGB565格式)
+                            let mut ack_ok = true;
+                            if matches!(config.format, ImageFormat::Rgb565Lz4Compressed | ImageFormat::RGB565) {
+                                // 等待ESP32的ACK/NACK响应 (3秒超时)
+                                match soc.read() {
+                                    Ok(msg) => {
+                                        match msg {
+                                            tungstenite::Message::Text(text) => {
+                                                if text == "NACK" {
+                                                    // 收到NACK，重置编码器，下一帧发送关键帧
+                                                    println!("收到NACK，重置编码器");
+                                                    delta_encoder.reset();
+                                                }
+                                                // ACK或其他消息都继续
+                                            }
+                                            tungstenite::Message::Close(_) => {
+                                                ack_ok = false;
+                                            }
+                                            _ => {
+                                                // 忽略其他消息类型(Ping/Pong等)
+                                            }
+                                        }
+                                    }
+                                    Err(e) => {
+                                        // 超时或连接错误，重置编码器发送关键帧
+                                        eprintln!("等待ACK超时/失败: {}，重置编码器", e);
+                                        delta_encoder.reset();
+                                        // 超时不算连接断开，继续尝试
+                                    }
+                                }
+                            }
+                            ack_ok
+                        }
                     }
                     OutputTarget::UsbSerial { .. } => {
                         match serial_port.as_mut() {
@@ -323,14 +494,23 @@ fn run_recorder(recorder: Arc<Mutex<Recorder>>) -> !{
                         }
                     }
                 };
+                
+                let send_ms = send_start.elapsed().as_millis();
+                let total_ms = t1.elapsed().as_millis();
+                println!("[FRAME] type={} {}x{} bytes={} encode={}ms send+ack={}ms total={}ms", 
+                    frame_type, img.width(), img.height(), out_bytes, encode_ms, send_ms, total_ms);
+                
                 if !send_ok {
                     recorder.websocket_status = Status::Disconnected;
                     let _ = socket.take();
                     let _ = serial_port.take();
+                    // 发送失败，重置帧差分编码器
+                    delta_encoder.reset();
                     sleep_duration = Duration::from_millis(3000);
                     continue;
                 }
-                sleep_duration = Duration::from_millis(config.delay_ms);
+                // ACK确认后无需额外延迟，立即截取下一帧
+                sleep_duration = Duration::from_millis(1);
             }
         }
     }

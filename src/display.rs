@@ -597,8 +597,8 @@ pub fn draw_rgb565_u8array_fast(
     let (end_x, end_y) = (x + width - 1, y + height - 1);
     
     // 输出关键绘制信息
-    info!("[DRAW] pos=({},{}) size={}x{} window=({},{})..({},{}) bytes={}", 
-        x, y, width, height, x, y, end_x, end_y, pixels.len());
+    // info!("[DRAW] pos=({},{}) size={}x{} window=({},{})..({},{}) bytes={}", 
+    //     x, y, width, height, x, y, end_x, end_y, pixels.len());
     
     // 如果没有色调调整，直接绘制
     let draw_result = if adj_r == 0 && adj_g == 0 && adj_b == 0 {
@@ -615,7 +615,7 @@ pub fn draw_rgb565_u8array_fast(
         }
     } else {
         // 应用色调调整
-        info!("[DRAW] color_adjust r={} g={} b={}", adj_r, adj_g, adj_b);
+        // info!("[DRAW] color_adjust r={} g={} b={}", adj_r, adj_g, adj_b);
         let mut adjusted_pixels = Vec::with_capacity(pixels.len());
         for chunk in pixels.chunks_exact(2) {
             let pixel = u16::from_be_bytes([chunk[0], chunk[1]]);
@@ -641,7 +641,7 @@ pub fn draw_rgb565_u8array_fast(
     
     match draw_result {
         Ok(_) => {
-            info!("[DRAW_OK] {}x{} pixels in {}ms", width, height, elapsed_ms);
+            // info!("[DRAW_OK] {}x{} pixels in {}ms", width, height, elapsed_ms);
             Ok(())
         }
         Err(err) => {
